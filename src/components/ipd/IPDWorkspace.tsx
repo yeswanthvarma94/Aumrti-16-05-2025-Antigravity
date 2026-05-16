@@ -1,0 +1,728 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
+import { BedDouble, ExternalLink, ArrowUpRight, Printer } from "lucide-react";
+import { printDocument, printHeader } from "@/lib/printUtils";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
+import type { BedData } from "@/pages/ipd/IPDPage";
+import AdvanceManagement from "./AdvanceManagement";
+import IPDOverviewTab from "./tabs/IPDOverviewTab";
+import IPDVitalsTab from "./tabs/IPDVitalsTab";
+import IPDMedicationsTab from "./tabs/IPDMedicationsTab";
+import IPDWardRoundTab from "./tabs/IPDWardRoundTab";
+import IPDNotesTab from "./tabs/IPDNotesTab";
+import IPDDocumentsTab from "./tabs/IPDDocumentsTab";
+import IPDLedgerTab from "./tabs/IPDLedgerTab";
+import BedTransferModal from "./BedTransferModal";
+import NewLabOrderModal from "@/components/lab/NewLabOrderModal";
+import NewRadiologyOrderModal from "@/components/radiology/NewRadiologyOrderModal";
+import { useWhatsAppNotification } from "@/components/whatsapp/WhatsAppNotificationCard";
+import { sendDischargeSummaryNotif, sendFeedbackRequest } from "@/lib/whatsapp-notifications";
+import { getSpecialtySheet, specialtyTabMeta } from "@/lib/specialtyDetection";
+import ObstetricSheet from "@/components/specialty/ObstetricSheet";
+import NeonatalSheet from "@/components/specialty/NeonatalSheet";
+import AnaesthesiaSheet from "@/components/specialty/AnaesthesiaSheet";
+import OphthalmologySheet from "@/components/specialty/OphthalmologySheet";
+import { AlertTriangle, FlaskConical, ScanLine, Pill, Microphone, ClipboardList, CheckCircle2 } from "lucide-react";
+import { getNEWS2BadgeClasses, getNEWS2Level } from "@/lib/news2";
+import RxOrdersTab from "@/components/opd/tabs/RxOrdersTab";
+import { useVoiceScribe } from "@/contexts/VoiceScribeContext";
+import type { PrescriptionData, DrugEntry, LabOrder, RadiologyOrder } from "@/components/opd/ConsultationWorkspace";
+import VoiceDictationButton from "@/components/voice/VoiceDictationButton";
+import { generateBillNumber } from "@/hooks/useBillNumber";
+import { autoPostJournalEntry } from "@/lib/accounting";
+import { recalculateBillTotalsSafe } from "@/lib/billTotals";
+import { syncLabOrders, syncRadiologyOrders } from "@/lib/investigationSync";
+
+interface Props {
+  bed: BedData | null;
+  hospitalId: string | null;
+  userId: string | null;
+  onRefresh: () => void;
+}
+
+export interface PatientDetails {
+  id: string;
+  full_name: string;
+  uhid: string;
+  dob: string | null;
+  gender: string | null;
+  blood_group: string | null;
+  phone: string | null;
+  allergies: string | null;
+  chronic_conditions: string[] | null;
+  insurance_id: string | null;
+}
+
+const emptyPrescription: PrescriptionData = {
+  drugs: [],
+  lab_orders: [],
+  radiology_orders: [],
+  advice_notes: "",
+  review_date: "",
+  is_signed: false,
+};
+
+const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) => {
+  const navigate = useNavigate();
+  const [patient, setPatient] = useState<PatientDetails | null>(null);
+  const [activeTab, setActiveTab] = useState("overview");
+  const [deptName, setDeptName] = useState<string | null>(null);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [highlightDischarge, setHighlightDischarge] = useState(false);
+  const [showLabModal, setShowLabModal] = useState(false);
+  const [showRadiologyModal, setShowRadiologyModal] = useState(false);
+  const [latestNews2, setLatestNews2] = useState<number | null>(null);
+  const [prescription, setPrescription] = useState<PrescriptionData>(emptyPrescription);
+  const [savingOrders, setSavingOrders] = useState(false);
+  const { registerScreen, unregisterScreen } = useVoiceScribe();
+  const { show: showWaNotif, card: waCard } = useWhatsAppNotification();
+
+
+
+  useEffect(() => {
+    if (!bed?.admission) { setDeptName(null); return; }
+    const admData = bed.admission as any;
+    if (admData.department_id) {
+      supabase.from('departments').select('name').eq('id', admData.department_id).maybeSingle()
+        .then(({ data }) => setDeptName(data?.name || null));
+    } else {
+      setDeptName(null);
+    }
+  }, [bed]);
+
+  const specialty = useMemo(() => getSpecialtySheet(deptName), [deptName]);
+
+  useEffect(() => {
+    if (!bed?.admission) { setPatient(null); return; }
+    const admissionData = bed.admission as any;
+    supabase.from("patients").select("*")
+      .eq("id", admissionData.patient_id || "")
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) setPatient(data as unknown as PatientDetails);
+      });
+  }, [bed]);
+
+  // Fetch latest NEWS2 score for the patient header badge
+  useEffect(() => {
+    if (!bed?.admission) { setLatestNews2(null); return; }
+    const admissionData = bed.admission as any;
+    supabase.from("ipd_vitals")
+      .select("news2_score")
+      .eq("admission_id", admissionData.id)
+      .order("recorded_at", { ascending: false })
+      .limit(1)
+      .then(({ data }) => {
+        setLatestNews2(data?.[0]?.news2_score ?? null);
+      });
+  }, [bed, activeTab]);
+
+  // Voice Scribe Integration
+  useEffect(() => {
+    const fillFn = (data: Record<string, unknown>) => {
+      // Fill prescription
+      const drugs = ((data.prescription as DrugEntry[]) || []).map((d) => ({
+        drug_name: d.drug_name || "",
+        dose: d.dose || "",
+        route: d.route || "Oral",
+        frequency: d.frequency || "OD",
+        duration_days: (d as any).duration || "",
+        instructions: d.instructions || "",
+        quantity: "",
+        is_stat: false,
+      }));
+
+      const isRadiology = (name: string) =>
+        /\bx[\s-]?ray\b|\bcect\b|\bhrct\b|\bct\b|\bmri\b|\busg\b|\bultrasound\b|\bultrasonography\b|\becg\b|\belectrocardiogram\b|\becho\b|\b2d\s*echo\b|\bechocardiography\b|\bdexa\b|\bmammograph|\bfluoroscop|\bpet\b/i.test(name);
+
+      const labOrders: LabOrder[] = [];
+      const radOrders: RadiologyOrder[] = [];
+      ((data.investigations as string[]) || []).forEach((name) => {
+        if (isRadiology(name)) radOrders.push({ test_name: name, urgency: "routine", clinical_indication: "" });
+        else labOrders.push({ test_name: name, urgency: "routine", clinical_indication: "" });
+      });
+
+      if (drugs.length > 0 || labOrders.length > 0 || radOrders.length > 0) {
+        setPrescription((prev) => ({
+          ...prev,
+          drugs: [...prev.drugs, ...drugs],
+          lab_orders: [...prev.lab_orders, ...labOrders],
+          radiology_orders: [...prev.radiology_orders, ...radOrders],
+          advice_notes: (data.advice_notes as string) || (data.follow_up as string) || prev.advice_notes,
+        }));
+        setActiveTab("rx_orders");
+        toast({ title: "Voice scribe populated Rx & Orders" });
+      }
+    };
+    registerScreen("ipd_workspace", fillFn);
+    return () => unregisterScreen("ipd_workspace");
+  }, [registerScreen, unregisterScreen]);
+
+  if (!bed) {
+    return (
+      <div className="flex-1 bg-muted/30 flex flex-col items-center justify-center">
+        <BedDouble className="h-12 w-12 text-muted-foreground/30 mb-3" />
+        <p className="text-base text-muted-foreground">Click a bed to view patient details</p>
+        <p className="text-[13px] text-muted-foreground/60 mt-1">or click an available bed to admit a new patient</p>
+      </div>
+    );
+  }
+
+  if (bed.status === "available") {
+    return (
+      <div className="flex-1 bg-muted/30 flex flex-col items-center justify-center">
+        <BedDouble className="h-10 w-10 text-emerald-400 mb-3" />
+        <p className="text-base text-foreground">Bed {bed.bed_number} is available</p>
+        <p className="text-[13px] text-muted-foreground mt-2">Click "+ New Admission" to admit a patient</p>
+      </div>
+    );
+  }
+
+  if (bed.status !== "occupied" || !bed.admission) {
+    return (
+      <div className="flex-1 bg-muted/30 flex flex-col items-center justify-center">
+        <BedDouble className="h-10 w-10 text-muted-foreground/30 mb-3" />
+        <p className="text-base text-muted-foreground">Bed {bed.bed_number} — {bed.status}</p>
+      </div>
+    );
+  }
+
+  const adm = bed.admission;
+  const admissionId = adm.id;
+  const patientAge = patient?.dob
+    ? Math.floor((Date.now() - new Date(patient.dob).getTime()) / 31557600000)
+    : null;
+
+  const typeColors: Record<string, string> = {
+    elective: "bg-blue-50 text-blue-600",
+    emergency: "bg-red-50 text-red-600",
+    transfer: "bg-violet-50 text-violet-600",
+    daycare: "bg-emerald-50 text-emerald-600",
+  };
+
+  const handleInitiateDischarge = () => {
+    setActiveTab("overview");
+    setHighlightDischarge(true);
+    setTimeout(() => setHighlightDischarge(false), 4000);
+  };
+
+  const handleEscalate = async () => {
+    if (!hospitalId || !patient) return;
+    const { error } = await supabase.from("clinical_alerts").insert({
+      hospital_id: hospitalId,
+      patient_id: patient.id,
+      alert_type: "escalation",
+      severity: "critical",
+      message: `ESCALATION: ${patient.full_name} (Bed ${bed.bed_number}) requires immediate attention`,
+      status: "active",
+    } as any);
+    if (error) {
+      toast({ title: "Escalation failed", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "🚨 Escalation alert created", description: `ICU/senior team notified for ${patient.full_name}` });
+    }
+  };
+
+  const handlePrintCaseSheet = async () => {
+    if (!bed?.admission || !hospitalId || !patient) return;
+    const admissionData = bed.admission as any;
+    
+    toast({ title: "Generating case sheet..." });
+
+    // Fetch hospital info
+    const { data: hospital } = await supabase.from("hospitals").select("name, address").eq("id", hospitalId).maybeSingle();
+
+    // Fetch all details
+    const [vitalsRes, medsRes, notesRes] = await Promise.all([
+      supabase.from("ipd_vitals").select("*").eq("admission_id", admissionId).order("recorded_at", { ascending: false }),
+      supabase.from("ipd_medications").select("*").eq("admission_id", admissionId).order("created_at", { ascending: false }),
+      supabase.from("ward_round_notes").select("*, doctor:users!ward_round_notes_doctor_id_fkey(full_name)").eq("admission_id", admissionId).order("created_at", { ascending: false })
+    ]);
+
+    const vitalsHtml = vitalsRes.data && vitalsRes.data.length > 0
+      ? `<div class="section-title">Vitals History</div>
+         <table>
+           <tr><th>Time</th><th>BP</th><th>Pulse</th><th>Temp</th><th>SpO2</th><th>RR</th><th>NEWS2</th></tr>
+           ${vitalsRes.data.map(v => `<tr>
+             <td>${new Date(v.recorded_at).toLocaleString("en-IN", { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+             <td>${v.bp_systolic || '—'}/${v.bp_diastolic || '—'}</td>
+             <td>${v.pulse || '—'}</td>
+             <td>${v.temperature || '—'}</td>
+             <td>${v.spo2 || '—'}%</td>
+             <td>${v.respiratory_rate || '—'}</td>
+             <td><b>${v.news2_score ?? '—'}</b></td>
+           </tr>`).join("")}
+         </table>`
+      : "";
+
+    const medsHtml = medsRes.data && medsRes.data.length > 0
+      ? `<div class="section-title">Active Medications</div>
+         <table>
+           <tr><th>Medication</th><th>Dose</th><th>Freq</th><th>Route</th><th>Status</th></tr>
+           ${medsRes.data.map(m => `<tr>
+             <td><b>${m.drug_name}</b></td>
+             <td>${m.dose}</td>
+             <td>${m.frequency}</td>
+             <td>${m.route}</td>
+             <td>${m.is_active ? 'Active' : 'Stopped'}</td>
+           </tr>`).join("")}
+         </table>`
+      : "";
+
+    const notesHtml = notesRes.data && notesRes.data.length > 0
+      ? `<div class="section-title">Clinical Ward Rounds</div>
+         ${notesRes.data.map(n => `
+           <div style="border:1px solid #e2e8f0; border-radius:4px; padding:10px; margin-bottom:10px; background:#f8fafc;">
+             <div style="display:flex; justify-content:space-between; margin-bottom:8px; border-bottom:1px solid #e2e8f0; padding-bottom:4px;">
+               <span style="font-size:11px; font-weight:bold;">${new Date(n.created_at).toLocaleString("en-IN")}</span>
+               <span style="font-size:11px; color:#64748b;">Dr. ${(n.doctor as any)?.full_name || 'Consultant'}</span>
+             </div>
+             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:12px;">
+               <div><span class="label">Subjective:</span> ${n.subjective || '—'}</div>
+               <div><span class="label">Objective:</span> ${n.objective || '—'}</div>
+               <div><span class="label">Assessment:</span> ${n.assessment || '—'}</div>
+               <div><span class="label">Plan:</span> ${n.plan || '—'}</div>
+             </div>
+           </div>
+         `).join("")}`
+      : "";
+
+    const body = `
+      ${printHeader(hospital?.name || "Hospital", "IPD CASE SHEET", `<p style="font-size:12px">${hospital?.address || ""}</p>`)}
+      
+      <div style="display:flex;justify-content:space-between;border-bottom:2px solid #1A2F5A;padding-bottom:10px;margin-bottom:15px;">
+        <div>
+          <div class="row"><span class="label">Patient:</span> <b>${patient.full_name}</b></div>
+          <div class="row"><span class="label">UHID:</span> <b>${patient.uhid}</b></div>
+          <div class="row"><span class="label">Age/Sex:</span> <span>${patientAge}y / ${patient.gender}</span></div>
+        </div>
+        <div style="text-align:right">
+          <div class="row"><span class="label">IP No:</span> <b>${admissionData.admission_number || '—'}</b></div>
+          <div class="row"><span class="label">Bed:</span> <b>${bed.bed_number} (${deptName || '—'})</b></div>
+          <div class="row"><span class="label">Admitted:</span> <span>${new Date(admissionData.admitted_at).toLocaleDateString("en-IN")}</span></div>
+        </div>
+      </div>
+
+      ${vitalsHtml}
+      ${medsHtml}
+      ${notesHtml}
+
+      <div style="margin-top:40px; border-top:1px dashed #cbd5e1; padding-top:20px; font-size:10px; color:#94a3b8; text-align:center;">
+        End of Clinical Case Sheet — Generated on ${new Date().toLocaleString("en-IN")}
+      </div>
+    `;
+
+    printDocument(`CaseSheet_${patient.uhid}`, body);
+  };
+
+  const handleCommitOrders = async () => {
+    if (!hospitalId || !userId || !patient || !admissionId) return;
+    
+    const hasDrugs = prescription.drugs.length > 0;
+    const hasLabs = prescription.lab_orders.length > 0;
+    const hasRads = prescription.radiology_orders.length > 0;
+
+    if (!hasDrugs && !hasLabs && !hasRads) {
+      toast({ title: "No new orders to commit" });
+      return;
+    }
+
+    setSavingOrders(true);
+    try {
+      // 1. Commit Medications
+      if (hasDrugs) {
+        const medsToInsert = prescription.drugs.map(d => ({
+          hospital_id: hospitalId,
+          admission_id: admissionId,
+          drug_name: d.drug_name,
+          dose: d.dose,
+          route: d.route,
+          frequency: d.frequency,
+          ordered_by: userId,
+          start_date: new Date().toISOString().split('T')[0],
+          end_date: d.duration_days ? new Date(Date.now() + parseInt(d.duration_days) * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
+          is_active: true
+        }));
+        const { error: medErr } = await supabase.from("ipd_medications").insert(medsToInsert);
+        if (medErr) throw medErr;
+      }
+
+      // 2. Commit Lab Orders (with billing)
+      if (hasLabs) {
+        // Fetch rates for billing
+        const { data: masterTests } = await supabase.from("lab_test_master")
+          .select("id, test_name, fee, gst_percent")
+          .eq("hospital_id", hospitalId)
+          .in("test_name", prescription.lab_orders.map(l => l.test_name));
+
+        const created = await syncLabOrders({
+          hospitalId,
+          patientId: patient.id,
+          orderedBy: userId,
+          admissionId,
+          items: prescription.lab_orders
+        });
+
+        if (created > 0) {
+          // Manual billing for the synced orders
+          const subtotal = (masterTests || []).reduce((sum, t) => sum + Number(t.fee || 0), 0);
+          const gstTotal = (masterTests || []).reduce((sum, t) => sum + (Number(t.fee || 0) * (Number(t.gst_percent || 0) / 100)), 0);
+          const totalAmount = subtotal + gstTotal;
+
+          if (totalAmount > 0) {
+            const billNum = await generateBillNumber(hospitalId, "LAB");
+            const { data: bill } = await supabase.from("bills").insert({
+              hospital_id: hospitalId,
+              patient_id: patient.id,
+              admission_id: admissionId,
+              bill_number: billNum,
+              bill_type: "lab",
+              bill_status: "final",
+              bill_date: new Date().toISOString().split("T")[0],
+              total_amount: totalAmount,
+              subtotal,
+              gst_amount: gstTotal,
+              payment_status: "unpaid",
+              created_by: userId,
+            }).select("id").maybeSingle();
+
+            if (bill) {
+              await supabase.from("bill_line_items").insert((masterTests || []).map(t => ({
+                hospital_id: hospitalId,
+                bill_id: bill.id,
+                description: `Lab: ${t.test_name}`,
+                item_type: "lab",
+                quantity: 1,
+                unit_rate: t.fee,
+                taxable_amount: t.fee,
+                gst_percent: t.gst_percent,
+                gst_amount: Number(t.fee) * (Number(t.gst_percent || 0) / 100),
+                total_amount: Number(t.fee) * (1 + (Number(t.gst_percent || 0) / 100)),
+                source_module: "lab",
+                ordered_by: userId,
+              })));
+
+              await autoPostJournalEntry({
+                triggerEvent: 'bill_finalized_lab',
+                sourceModule: 'lab',
+                sourceId: bill.id,
+                amount: totalAmount,
+                description: `Lab Revenue - Bill ${billNum}`,
+                hospitalId,
+                postedBy: userId,
+              });
+
+              await recalculateBillTotalsSafe(bill.id);
+            }
+          }
+        }
+      }
+
+      // 3. Commit Radiology Orders (with billing)
+      if (hasRads) {
+        // Fetch study master for rates
+        const { data: masterStudies } = await supabase.from("radiology_study_master")
+          .select("study_name, fee, gst_percent")
+          .eq("hospital_id", hospitalId)
+          .in("study_name", prescription.radiology_orders.map(r => r.study_name));
+
+        const created = await syncRadiologyOrders({
+          hospitalId,
+          patientId: patient.id,
+          orderedBy: userId,
+          admissionId,
+          items: prescription.radiology_orders
+        });
+
+        if (created > 0) {
+          const subtotal = (masterStudies || []).reduce((sum, s) => sum + Number(s.fee || 0), 0);
+          const gstTotal = (masterStudies || []).reduce((sum, s) => sum + (Number(s.fee || 0) * (Number(s.gst_percent || 0) / 100)), 0);
+          const totalAmount = subtotal + gstTotal;
+
+          if (totalAmount > 0) {
+            const billNum = await generateBillNumber(hospitalId, "RAD");
+            const { data: bill } = await supabase.from("bills").insert({
+              hospital_id: hospitalId,
+              patient_id: patient.id,
+              admission_id: admissionId,
+              bill_number: billNum,
+              bill_type: "radiology",
+              bill_status: "final",
+              bill_date: new Date().toISOString().split("T")[0],
+              total_amount: totalAmount,
+              subtotal,
+              gst_amount: gstTotal,
+              payment_status: "unpaid",
+              created_by: userId,
+            }).select("id").maybeSingle();
+
+            if (bill) {
+              await supabase.from("bill_line_items").insert((masterStudies || []).map(s => ({
+                hospital_id: hospitalId,
+                bill_id: bill.id,
+                description: `Rad: ${s.study_name}`,
+                item_type: "radiology",
+                quantity: 1,
+                unit_rate: s.fee,
+                taxable_amount: s.fee,
+                gst_percent: s.gst_percent,
+                gst_amount: Number(s.fee) * (Number(s.gst_percent || 0) / 100),
+                total_amount: Number(s.fee) * (1 + (Number(s.gst_percent || 0) / 100)),
+                source_module: "radiology",
+                ordered_by: userId,
+              })));
+
+              await autoPostJournalEntry({
+                triggerEvent: 'bill_finalized_radiology',
+                sourceModule: 'radiology',
+                sourceId: bill.id,
+                amount: totalAmount,
+                description: `Radiology Revenue - Bill ${billNum}`,
+                hospitalId,
+                postedBy: userId,
+              });
+
+              await recalculateBillTotalsSafe(bill.id);
+            }
+          }
+        }
+      }
+
+      toast({ title: "Orders committed successfully", description: "Medications active in MAR, investigations billed." });
+      setPrescription(emptyPrescription);
+      onRefresh();
+    } catch (err: any) {
+      toast({ title: "Commit failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSavingOrders(false);
+    }
+  };
+
+  return (
+    <>
+    {waCard}
+    <div className="flex-1 flex flex-col overflow-hidden bg-muted/30">
+      {/* Patient Header */}
+      <div className="flex-shrink-0 h-[72px] bg-card border-b border-border px-5 flex items-center gap-4">
+        <div className="w-10 h-10 rounded-full bg-[#1A2F5A] text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
+          {adm.patient_initials}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-base font-bold text-foreground truncate">{adm.patient_name}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            {patient?.uhid && <span className="text-[11px] bg-muted text-muted-foreground px-1.5 py-px rounded">{patient.uhid}</span>}
+            {(adm as any).admission_number && <span className="text-[11px] bg-blue-50 text-blue-600 px-1.5 py-px rounded">{(adm as any).admission_number}</span>}
+            {patientAge !== null && patient?.gender && <span className="text-[11px] text-muted-foreground">{patientAge}y · {patient.gender}</span>}
+            {patient?.blood_group && <span className="text-[11px] bg-red-50 text-red-600 px-1.5 py-px rounded">{patient.blood_group}</span>}
+          </div>
+        </div>
+        <div className="hidden lg:flex flex-col items-start min-w-0 flex-1">
+          {(adm as any).admitting_diagnosis && <p className="text-sm text-muted-foreground italic truncate max-w-full">{(adm as any).admitting_diagnosis}</p>}
+          <span className="text-[11px] bg-muted text-muted-foreground px-1.5 py-px rounded mt-0.5">Dr. {adm.doctor_name}</span>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {latestNews2 !== null && (
+            <span
+              className={cn(
+                "text-[11px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1",
+                getNEWS2BadgeClasses(latestNews2)
+              )}
+              title={`Latest NEWS2: ${latestNews2} (${getNEWS2Level(latestNews2)})`}
+            >
+              {getNEWS2Level(latestNews2) !== "low" && <AlertTriangle className="h-3 w-3" />}
+              NEWS2 {latestNews2}
+            </span>
+          )}
+          <span className="text-[11px] text-muted-foreground">Day {adm.los_days}</span>
+          <span className={cn("text-[11px] font-medium px-2 py-0.5 rounded-full", typeColors[adm.admission_type] || "bg-muted text-muted-foreground")}>{adm.admission_type}</span>
+          <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-[#1A2F5A]" onClick={handlePrintCaseSheet} title="Print Case Sheet">
+            <Printer className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Tab strip */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
+        <TabsList className="flex-shrink-0 h-11 w-full justify-start rounded-none bg-card border-b border-border px-2 gap-0">
+          {[
+            { v: "overview", l: "Overview" },
+            { v: "vitals", l: "Vitals" },
+            { v: "medications", l: "Medications" },
+            { v: "rx_orders", l: "Rx & Orders" },
+            { v: "wardround", l: "Ward Round" },
+            { v: "notes", l: "Notes" },
+            { v: "documents", l: "Documents" },
+            { v: "advance", l: "💰 Advance" },
+            { v: "ledger", l: "📋 Ledger" },
+            ...(specialty ? [{ v: "specialty", l: `${specialtyTabMeta[specialty].icon} ${specialtyTabMeta[specialty].label}` }] : []),
+          ].map((t) => (
+            <TabsTrigger key={t.v} value={t.v}
+              className="text-[13px] rounded-none border-b-2 border-transparent data-[state=active]:border-[#1A2F5A] data-[state=active]:text-[#1A2F5A] data-[state=active]:shadow-none data-[state=active]:bg-transparent px-4 h-full"
+            >{t.l}</TabsTrigger>
+          ))}
+        </TabsList>
+
+        <div className="flex-1 overflow-hidden">
+          <TabsContent value="overview" className="h-full m-0">
+            <IPDOverviewTab admissionId={admissionId} hospitalId={hospitalId} onTabChange={setActiveTab} patientName={patient?.full_name} patientPhone={patient?.phone} highlightDischarge={highlightDischarge} />
+          </TabsContent>
+          <TabsContent value="vitals" className="h-full m-0">
+            <IPDVitalsTab admissionId={admissionId} hospitalId={hospitalId} userId={userId} patientId={patient?.id} />
+          </TabsContent>
+          <TabsContent value="medications" className="h-full m-0">
+            <IPDMedicationsTab admissionId={admissionId} hospitalId={hospitalId} userId={userId} patientAllergies={patient?.allergies ? patient.allergies.split(",").map(a => a.trim()) : []} />
+          </TabsContent>
+          <TabsContent value="rx_orders" className="h-full m-0">
+            <RxOrdersTab
+              prescription={prescription}
+              onChange={(p) => setPrescription(prev => ({ ...prev, ...p }))}
+              hospitalId={hospitalId}
+              patientAllergies={patient?.allergies ? patient.allergies.split(",").map(a => a.trim()) : []}
+              patientAge={patientAge || undefined}
+              patientGender={patient?.gender || undefined}
+              onCommit={handleCommitOrders}
+              isSaving={savingOrders}
+            />
+          </TabsContent>
+          <TabsContent value="wardround" className="h-full m-0">
+            <IPDWardRoundTab admissionId={admissionId} hospitalId={hospitalId} userId={userId} patientId={patient?.id || null} />
+          </TabsContent>
+          <TabsContent value="notes" className="h-full m-0">
+            <IPDNotesTab admissionId={admissionId} hospitalId={hospitalId} userId={userId} patientId={patient?.id} />
+          </TabsContent>
+          <TabsContent value="documents" className="h-full m-0">
+            <IPDDocumentsTab admissionId={admissionId} hospitalId={hospitalId} patientId={patient?.id || null} />
+          </TabsContent>
+          <TabsContent value="advance" className="h-full m-0 overflow-auto p-4">
+            {hospitalId && patient && (
+              <AdvanceManagement
+                admissionId={admissionId}
+                patientId={patient.id}
+                hospitalId={hospitalId}
+                userId={userId}
+                patientName={patient.full_name}
+              />
+            )}
+          </TabsContent>
+          <TabsContent value="ledger" className="h-full m-0">
+            {hospitalId && patient && (
+              <IPDLedgerTab admissionId={admissionId} patientId={patient.id} hospitalId={hospitalId} />
+            )}
+          </TabsContent>
+          {specialty && hospitalId && patient && (
+            <TabsContent value="specialty" className="h-full m-0">
+              {specialty === 'obstetric' && <ObstetricSheet patientId={patient.id} hospitalId={hospitalId} admissionId={admissionId} />}
+              {specialty === 'neonatal' && <NeonatalSheet patientId={patient.id} hospitalId={hospitalId} admissionId={admissionId} />}
+              {specialty === 'anaesthesia' && <AnaesthesiaSheet patientId={patient.id} hospitalId={hospitalId} admissionId={admissionId} />}
+              {specialty === 'ophthalmology' && <OphthalmologySheet patientId={patient.id} hospitalId={hospitalId} />}
+            </TabsContent>
+          )}
+        </div>
+      </Tabs>
+
+      {/* Bottom action bar */}
+      <div className="flex-shrink-0 h-14 bg-card border-t border-border px-5 flex items-center justify-between">
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => setActiveTab("rx_orders")} className="bg-[#1A2F5A] hover:bg-[#152647] text-xs h-8">
+            <ClipboardList className="h-3.5 w-3.5 mr-1.5" /> Rx & Orders
+          </Button>
+          <Button size="sm" onClick={() => setActiveTab("wardround")} className="bg-slate-100 text-slate-700 hover:bg-slate-200 text-xs h-8">
+            📝 Ward Round
+          </Button>
+          <VoiceDictationButton sessionType="ipd_workspace" size="sm" />
+          <Button size="sm" variant="outline" onClick={() => setActiveTab("medications")} className="text-xs h-8">
+            💊 Add Medication
+          </Button>
+          {patient && hospitalId && (
+            <Button size="sm" variant="outline" className="text-xs h-8" onClick={() => setShowLabModal(true)}>
+              🔬 Order Lab
+            </Button>
+          )}
+          {patient && hospitalId && (
+            <Button size="sm" variant="outline" className="text-xs h-8" onClick={() => setShowRadiologyModal(true)}>
+              📡 Order Radiology
+            </Button>
+          )}
+          {patient && hospitalId && (
+            <Button size="sm" variant="outline" className="text-xs h-8 border-teal-300 text-teal-700 hover:bg-teal-50" onClick={async () => {
+              const { error } = await supabase.from("physio_referrals").insert({
+                hospital_id: hospitalId,
+                patient_id: patient.id,
+                admission_id: admissionId,
+                referred_by: userId || undefined,
+                diagnosis: (adm as any).admitting_diagnosis || "Physiotherapy referral",
+                goals: [],
+                urgency: "routine",
+              } as any);
+              if (error) { toast({ title: "Referral failed", description: error.message, variant: "destructive" }); return; }
+              toast({ title: "↗ Referred to Physiotherapy" });
+            }}>
+              <ArrowUpRight size={14} className="mr-1" /> Refer Physio
+            </Button>
+          )}
+          {patient && (
+            <button onClick={() => navigate(`/patients?id=${patient.id}`)}
+              className="flex items-center gap-1 text-[12px] text-primary font-medium hover:underline h-8 px-2">
+              View Patient Record <ExternalLink className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="text-xs h-8 border-amber-300 text-amber-700 hover:bg-amber-50" onClick={handleInitiateDischarge}>
+            🏠 Initiate Discharge
+          </Button>
+          <Button size="sm" variant="outline" className="text-xs h-8" onClick={() => setShowTransfer(true)}>
+            🔁 Transfer
+          </Button>
+          <Button size="sm" variant="outline" className="text-xs h-8 border-red-300 text-red-600 hover:bg-red-50" onClick={handleEscalate}>
+            🚨 Escalate
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    {/* Lab Order Modal */}
+    {showLabModal && hospitalId && patient && (
+      <NewLabOrderModal
+        hospitalId={hospitalId}
+        preselectedPatient={{ id: patient.id, full_name: patient.full_name, uhid: patient.uhid, gender: patient.gender, dob: patient.dob }}
+        linkedAdmissionId={admissionId}
+        onClose={() => setShowLabModal(false)}
+        onCreated={() => { setShowLabModal(false); toast({ title: "Lab order created" }); }}
+      />
+    )}
+
+    {/* Radiology Order Modal */}
+    {showRadiologyModal && hospitalId && patient && (
+      <NewRadiologyOrderModal
+        hospitalId={hospitalId}
+        modalities={[]}
+        preselectedPatient={{ id: patient.id, full_name: patient.full_name, uhid: patient.uhid, gender: patient.gender, dob: patient.dob }}
+        linkedAdmissionId={admissionId}
+        onClose={() => setShowRadiologyModal(false)}
+        onCreated={() => { setShowRadiologyModal(false); toast({ title: "Radiology order created" }); }}
+      />
+    )}
+
+    {/* Transfer Modal */}
+    {showTransfer && hospitalId && patient && (
+      <BedTransferModal
+        open={showTransfer}
+        onClose={() => setShowTransfer(false)}
+        admissionId={admissionId}
+        hospitalId={hospitalId}
+        currentWardId={(adm as any).ward_id || ""}
+        currentBedId={bed.id}
+        patientName={patient.full_name}
+        onSuccess={onRefresh}
+      />
+    )}
+    </>
+  );
+};
+
+export default IPDWorkspace;
