@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { X, Search, ArrowLeft, CheckCircle2, Printer, IndianRupee, Loader2 } from "lucide-react";
 import { generateBillNumber } from "@/hooks/useBillNumber";
 import { autoPostJournalEntry } from "@/lib/accounting";
+import { logNABHEvidence } from "@/lib/nabh-evidence";
 import { printDocument } from "@/lib/printUtils";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -379,6 +380,8 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
           priority,
           accession_number: `RAD-${todayCompact}-${seq}`,
           is_pcpndt: isObstetricUsg,
+          billing_status: "billed",
+          ordered_at: new Date().toISOString(),
           ...(linkedEncounter ? { encounter_id: linkedEncounter } : {}),
           ...(linkedAdmission ? { admission_id: linkedAdmission } : {}),
         } as any)
@@ -396,6 +399,13 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
           signed_by: userId,
         });
       }
+
+      await logNABHEvidence(
+        hospitalId,
+        "COP.6",
+        `Radiology order created and billed: ${study.name} (${study.modalityType}) for patient ${selectedPatient.full_name}`,
+        "compliant"
+      );
     }
   };
 
@@ -411,7 +421,7 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
       const { data: bill, error: billErr } = await (supabase as any).from("bills").insert({
         hospital_id: hospitalId, patient_id: selectedPatient.id,
         encounter_id: linkedEncounter || null, bill_number: billNumber,
-        bill_type: "opd", bill_date: today, bill_status: "final", payment_status: "paid",
+        bill_type: "radiology", bill_date: today, bill_status: "final", payment_status: "paid",
         notes: paymentRef ? `Payment ref: ${paymentRef}` : null,
         subtotal: grandTotal, gst_amount: 0, total_amount: grandTotal,
         patient_payable: grandTotal, paid_amount: grandTotal, balance_due: 0,

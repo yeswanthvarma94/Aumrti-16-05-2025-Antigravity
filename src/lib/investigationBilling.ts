@@ -2,10 +2,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { generateBillNumber } from "@/hooks/useBillNumber";
 import { autoPostJournalEntry } from "@/lib/accounting";
 import { recalculateBillTotalsSafe } from "@/lib/billTotals";
+import { roundCurrency, calcGST } from "@/lib/currency";
 
 /**
  * Auto-bill OPD lab/radiology charges when results are finalized.
  * Skips IPD patients (handled by discharge auto-pull).
+ * Idempotent: returns null silently if the order is already billed.
  */
 export async function autoBillOpdInvestigation(opts: {
   hospitalId: string;
@@ -22,50 +24,54 @@ export async function autoBillOpdInvestigation(opts: {
     gstAmount?: number;
   }[];
   billPrefix: string; // 'LAB' or 'RAD'
-  sourceModule: string;
-  sourceId: string;
+  sourceModule: string; // 'lab' or 'radiology'
+  sourceId: string; // lab_orders.id or radiology_orders.id
 }): Promise<{ billId: string; total: number } | null> {
-  // Skip if IPD (admission-based billing handles it)
   if (opts.admissionId) return null;
   if (!opts.lineItems.length) return null;
 
-  try {
-    // Check if an existing OPD bill already covers this encounter
-    let existingBill: any = null;
-    if (opts.encounterId) {
-      const { data } = await (supabase as any)
-        .from("bills")
-        .select("id, subtotal, gst_amount, total_amount, patient_payable, balance_due")
-        .eq("hospital_id", opts.hospitalId)
-        .eq("patient_id", opts.patientId)
-        .eq("encounter_id", opts.encounterId)
-        .eq("bill_type", "opd")
-        .maybeSingle();
-      existingBill = data;
-    }
+  // Determine which table holds the order record
+  const orderTable = opts.sourceModule === "lab" ? "lab_orders" : "radiology_orders";
+  // bill_type matches sourceModule: "lab" | "radiology"
+  const billType = opts.sourceModule === "lab" ? "lab" : "radiology";
 
-    // Calculate line item totals
+  try {
+    // ── Idempotency guard ──────────────────────────────────────────────────────
+    // If the order row already has billing_status = 'billed', a prior run
+    // already created the bill. Return null — nothing to do.
+    const { data: orderRow } = await (supabase as any)
+      .from(orderTable)
+      .select("billing_status")
+      .eq("id", opts.sourceId)
+      .maybeSingle();
+
+    if (orderRow?.billing_status === "billed") return null;
+
+    // ── Calculate line item totals ─────────────────────────────────────────────
     let subtotal = 0;
     let totalGst = 0;
     const lineItemPayloads: any[] = [];
 
     for (const item of opts.lineItems) {
-      const qty = item.quantity || 1;
-      const lineTotal = item.unitRate * qty;
-      const gst = item.gstAmount || (item.gstPercent ? lineTotal * item.gstPercent / 100 : 0);
-      subtotal += lineTotal;
-      totalGst += gst;
+      const qty = item.quantity ?? 1;
+      const taxable = roundCurrency(item.unitRate * qty);
+      const gst = item.gstAmount != null
+        ? roundCurrency(item.gstAmount)
+        : calcGST(taxable, item.gstPercent ?? 0);
+      subtotal = roundCurrency(subtotal + taxable);
+      totalGst = roundCurrency(totalGst + gst);
 
       lineItemPayloads.push({
         hospital_id: opts.hospitalId,
         description: item.description,
-        item_type: item.itemType === "lab_test" ? "lab_test" : "radiology",
+        // DB CHECK constraint: 'lab' not 'lab_test'
+        item_type: item.itemType === "lab_test" ? "lab" : "radiology",
         unit_rate: item.unitRate,
         quantity: qty,
-        total_amount: lineTotal + gst,
-        gst_percent: item.gstPercent || 0,
+        taxable_amount: taxable,
+        gst_percent: item.gstPercent ?? 0,
         gst_amount: gst,
-        taxable_amount: lineTotal,
+        total_amount: roundCurrency(taxable + gst),
         service_date: new Date().toISOString().split("T")[0],
         source_module: opts.sourceModule,
         source_record_id: opts.sourceId,
@@ -73,25 +79,42 @@ export async function autoBillOpdInvestigation(opts: {
       });
     }
 
-    const grandTotal = subtotal + totalGst;
+    const grandTotal = roundCurrency(subtotal + totalGst);
+
+    // ── Open-bill lookup ───────────────────────────────────────────────────────
+    // Append to an existing unpaid/partial bill of the same type for this
+    // encounter, so repeated result entries don't create multiple bill headers.
+    let existingBill: any = null;
+    if (opts.encounterId) {
+      const { data } = await (supabase as any)
+        .from("bills")
+        .select("id")
+        .eq("hospital_id", opts.hospitalId)
+        .eq("patient_id", opts.patientId)
+        .eq("encounter_id", opts.encounterId)
+        .eq("bill_type", billType)
+        .in("payment_status", ["unpaid", "partial"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      existingBill = data;
+    }
+
+    let billId: string;
 
     if (existingBill) {
-      // Add line items to existing bill
+      billId = existingBill.id;
+
       for (const lp of lineItemPayloads) {
-        await (supabase as any).from("bill_line_items").insert({
-          ...lp,
-          bill_id: existingBill.id,
-        });
+        await (supabase as any).from("bill_line_items").insert({ ...lp, bill_id: billId });
       }
 
-      const result = await recalculateBillTotalsSafe(existingBill.id);
+      const result = await recalculateBillTotalsSafe(billId);
       if (!result.ok) {
         console.error("Investigation bill recalculation failed:", result.error);
       }
-
-      return { billId: existingBill.id, total: grandTotal };
     } else {
-      // Create new bill
+      // ── Create new bill ────────────────────────────────────────────────────
       const billNumber = await generateBillNumber(opts.hospitalId, opts.billPrefix);
 
       const { data: newBill, error: billErr } = await (supabase as any)
@@ -99,9 +122,9 @@ export async function autoBillOpdInvestigation(opts: {
         .insert({
           hospital_id: opts.hospitalId,
           patient_id: opts.patientId,
-          encounter_id: opts.encounterId || null,
+          encounter_id: opts.encounterId ?? null,
           bill_number: billNumber,
-          bill_type: "opd",
+          bill_type: billType,
           bill_date: new Date().toISOString().split("T")[0],
           bill_status: "final",
           payment_status: "unpaid",
@@ -119,21 +142,19 @@ export async function autoBillOpdInvestigation(opts: {
         return null;
       }
 
-      // Insert line items
+      billId = newBill.id;
+
       for (const lp of lineItemPayloads) {
-        await (supabase as any).from("bill_line_items").insert({
-          ...lp,
-          bill_id: newBill.id,
-        });
+        await (supabase as any).from("bill_line_items").insert({ ...lp, bill_id: billId });
       }
 
-      // Auto-post journal entry for revenue recognition
+      // Non-blocking journal entry for revenue recognition
       try {
-        const triggerEvent = opts.billPrefix === "LAB" ? "bill_finalized_lab" : "bill_finalized_radiology";
+        const triggerEvent = billType === "lab" ? "bill_finalized_lab" : "bill_finalized_radiology";
         await autoPostJournalEntry({
           triggerEvent,
           sourceModule: opts.sourceModule,
-          sourceId: newBill.id,
+          sourceId: billId,
           amount: grandTotal,
           description: `${opts.billPrefix} charges — Bill ${billNumber}`,
           hospitalId: opts.hospitalId,
@@ -142,9 +163,15 @@ export async function autoBillOpdInvestigation(opts: {
       } catch (e) {
         console.error("Journal auto-post error (non-blocking):", e);
       }
-
-      return { billId: newBill.id, total: grandTotal };
     }
+
+    // ── Mark order as billed ───────────────────────────────────────────────────
+    await (supabase as any)
+      .from(orderTable)
+      .update({ billing_status: "billed" })
+      .eq("id", opts.sourceId);
+
+    return { billId, total: grandTotal };
   } catch (err) {
     console.error("Auto-bill OPD investigation error:", err);
     return null;
@@ -152,28 +179,28 @@ export async function autoBillOpdInvestigation(opts: {
 }
 
 /**
- * Look up service rate from service_master, lab_test_master, or radiology_modalities.
+ * Look up service rate for a lab test or radiology study.
+ * Priority: service_master → lab_test_master / radiology_modalities → hard default.
  */
 export async function getInvestigationRate(
   hospitalId: string,
   name: string,
   type: "lab" | "radiology"
 ): Promise<{ rate: number; gstPercent: number }> {
-  // Try service_master first
-  const itemType = type === "lab" ? "lab_test" : "radiology";
+  // service_master uses "lab" and "radiology" item_type values (same as bill_line_items)
   const { data: svc } = await (supabase as any)
     .from("service_master")
     .select("rate, gst_percent")
     .eq("hospital_id", hospitalId)
-    .eq("item_type", itemType)
+    .eq("item_type", type)
     .ilike("name", `%${name}%`)
     .eq("is_active", true)
     .limit(1)
     .maybeSingle();
 
-  if (svc?.rate) return { rate: svc.rate, gstPercent: svc.gst_percent || 0 };
+  if (svc?.rate != null) return { rate: svc.rate, gstPercent: svc.gst_percent ?? 0 };
 
-  // Fallback: lab_test_master fee or radiology_modalities fee
+  // Type-specific master tables as fallback
   if (type === "lab") {
     const { data: lt } = await (supabase as any)
       .from("lab_test_master")
@@ -182,7 +209,7 @@ export async function getInvestigationRate(
       .ilike("test_name", `%${name}%`)
       .limit(1)
       .maybeSingle();
-    if (lt?.fee) return { rate: lt.fee, gstPercent: 0 };
+    if (lt?.fee != null) return { rate: lt.fee, gstPercent: 0 };
   } else {
     const { data: rm } = await (supabase as any)
       .from("radiology_modalities")
@@ -191,9 +218,9 @@ export async function getInvestigationRate(
       .ilike("name", `%${name}%`)
       .limit(1)
       .maybeSingle();
-    if (rm?.fee) return { rate: rm.fee, gstPercent: 0 };
+    if (rm?.fee != null) return { rate: rm.fee, gstPercent: 0 };
   }
 
-  // Default fallback
+  // Hard default — avoids ₹0 bills while alerting operators to configure rates
   return { rate: type === "lab" ? 200 : 500, gstPercent: 0 };
 }

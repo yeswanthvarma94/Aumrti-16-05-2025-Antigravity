@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { logNABHEvidence } from "@/lib/nabh-evidence";
 
 interface LabOrderInput {
   test_name: string;
@@ -63,6 +64,8 @@ export async function syncLabOrders(opts: {
     if (!item.test_name?.trim()) continue;
     if (existingTests.includes(item.test_name.toLowerCase())) continue;
 
+    const orderedAt = new Date().toISOString();
+
     // Create lab_order
     const { data: newOrder, error: orderErr } = await (supabase as any)
       .from("lab_orders")
@@ -75,6 +78,8 @@ export async function syncLabOrders(opts: {
         priority: item.urgency || "routine",
         clinical_notes: item.clinical_indication || null,
         status: "ordered",
+        billing_status: "unbilled",
+        ordered_at: orderedAt,
       })
       .select("id")
       .maybeSingle();
@@ -112,6 +117,13 @@ export async function syncLabOrders(opts: {
       barcode: `BC-${Date.now()}-${randomChars(4)}`,
       status: "pending",
     });
+
+    await logNABHEvidence(
+      opts.hospitalId,
+      "COP.6",
+      `Lab investigation ordered: ${item.test_name} for encounter ${opts.encounterId || opts.admissionId || "unknown"}`,
+      "compliant"
+    );
 
     created++;
     existingTests.push(item.test_name.toLowerCase());
@@ -164,6 +176,7 @@ export async function syncRadiologyOrders(opts: {
         item.study_name.toLowerCase().includes(m.modality_type?.toLowerCase() || "")
     );
 
+    const radOrderedAt = new Date().toISOString();
     const { error } = await (supabase as any)
       .from("radiology_orders")
       .insert({
@@ -178,12 +191,22 @@ export async function syncRadiologyOrders(opts: {
         priority: item.urgency || "routine",
         indication: item.clinical_indication || null,
         status: "ordered",
+        billing_status: "unbilled",
+        ordered_at: radOrderedAt,
       });
 
     if (error) {
       console.error("Radiology order insert failed:", error.message);
       continue;
     }
+
+    await logNABHEvidence(
+      opts.hospitalId,
+      "COP.6",
+      `Radiology investigation ordered: ${item.study_name} for encounter ${opts.encounterId || opts.admissionId || "unknown"}`,
+      "compliant"
+    );
+
     created++;
     existingStudies.push(item.study_name.toLowerCase());
   }

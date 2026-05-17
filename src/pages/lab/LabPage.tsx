@@ -17,6 +17,7 @@ interface LabOrder {
   status: string;
   order_date: string;
   order_time: string;
+  created_at: string | null;
   clinical_notes: string | null;
   patient_id: string;
   ordered_by: string;
@@ -52,7 +53,7 @@ const LabPage: React.FC = () => {
     const { data, error } = await supabase
       .from("lab_orders")
       .select(`
-        id, priority, status, order_date, order_time, clinical_notes, patient_id, ordered_by,
+        id, priority, status, order_date, order_time, created_at, clinical_notes, patient_id, ordered_by,
         patients (full_name, uhid, gender, dob, phone, blood_group),
         ordered_by_user:users!lab_orders_ordered_by_fkey (full_name),
         lab_order_items (id, status, result_flag, result_value, test_id, lab_test_master:lab_test_master!lab_order_items_test_id_fkey (tat_minutes))
@@ -65,12 +66,19 @@ const LabPage: React.FC = () => {
     if (error) {
       console.error("Lab orders fetch error:", error);
     } else {
-      // Remove orphaned orders (0 items) from DB and exclude from display
-      const emptyIds = (data || [])
-        .filter((o: any) => !o.lab_order_items || o.lab_order_items.length === 0)
+      // Only delete orders that are older than 5 minutes AND have no items.
+      // Immediate deletion races against investigationSync which creates the header
+      // row first and items in a subsequent INSERT — a fast refresh would destroy
+      // the in-flight order. The 5-minute grace window eliminates the race.
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const staleEmptyIds = (data || [])
+        .filter((o: any) =>
+          (!o.lab_order_items || o.lab_order_items.length === 0) &&
+          o.created_at && o.created_at < fiveMinutesAgo
+        )
         .map((o: any) => o.id);
-      if (emptyIds.length > 0) {
-        await supabase.from("lab_orders").delete().in("id", emptyIds);
+      if (staleEmptyIds.length > 0) {
+        await supabase.from("lab_orders").delete().in("id", staleEmptyIds);
       }
 
       const sorted = (data || [])

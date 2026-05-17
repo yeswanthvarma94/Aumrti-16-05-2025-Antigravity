@@ -1,18 +1,20 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, X, ChevronDown, ChevronUp, Sparkles, RefreshCw } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronUp, Sparkles, RefreshCw, AlertTriangle, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BillRecord } from "@/pages/billing/BillingPage";
 import type { LineItem } from "@/components/billing/BillEditor";
 import LeakageScanner from "@/components/billing/LeakageScanner";
 import UnbilledServicesModal from "@/components/billing/UnbilledServicesModal";
+import EnhancementRequestModal from "@/components/billing/EnhancementRequestModal";
 import { autoPullAdmissionCharges } from "@/lib/ipdBilling";
-import { formatINR } from "@/lib/currency";
+import { formatINR, roundCurrency } from "@/lib/currency";
 import { getDefaultGSTRate } from "@/lib/gstRules";
+import { fetchPreAuthCeiling, type PreAuthCeiling } from "@/lib/insuranceCeiling";
 
 function numberToWords(n: number): string {
   if (n === 0) return "Zero";
@@ -56,6 +58,18 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
   const [showGst, setShowGst] = useState(false);
   const [showUnbilled, setShowUnbilled] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
+
+  // Pre-auth ceiling enforcement (IPD insurance bills only)
+  const [preAuthCeiling, setPreAuthCeiling] = useState<PreAuthCeiling | null>(null);
+  const [enhancementBlocked, setEnhancementBlocked] = useState<{
+    svc: any;
+    total: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!bill.admission_id || !hospitalId || bill.bill_type !== "ipd") return;
+    fetchPreAuthCeiling(bill.admission_id, hospitalId).then(setPreAuthCeiling);
+  }, [bill.admission_id, hospitalId, bill.bill_type]);
 
   const handleRecalcIPD = async () => {
     if (!hospitalId || !bill.admission_id) return;
@@ -108,19 +122,22 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
 
   const VALID_ITEM_TYPES = ['consultation','procedure','room_charge','lab','radiology','pharmacy','surgery','package','nursing','consumable','blood','oxygen','other','service'];
 
-  const addServiceItem = async (svc: any) => {
+  const insertServiceLine = async (
+    svc: any,
+    opts: { isInsuranceCovered?: boolean } = {}
+  ) => {
     if (!hospitalId) return;
     const rate = Number(svc.fee) || 0;
     const itemType = VALID_ITEM_TYPES.includes(svc.item_type) ? svc.item_type : "other";
-    // Use GST from service master if set; otherwise derive from rule engine
-    const gstPct = svc.gst_percent != null && svc.gst_percent > 0
-      ? Number(svc.gst_percent)
-      : getDefaultGSTRate(itemType, rate);
+    const gstPct =
+      svc.gst_percent != null && svc.gst_percent > 0
+        ? Number(svc.gst_percent)
+        : getDefaultGSTRate(itemType, rate);
     const taxable = rate;
-    const gstAmt = taxable * gstPct / 100;
-    const total = taxable + gstAmt;
+    const gstAmt = roundCurrency(taxable * gstPct / 100);
+    const total = roundCurrency(taxable + gstAmt);
 
-    const { error } = await supabase.from("bill_line_items").insert({
+    const payload: Record<string, any> = {
       hospital_id: hospitalId,
       bill_id: bill.id,
       service_id: svc.id,
@@ -133,7 +150,12 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
       gst_amount: gstAmt,
       total_amount: total,
       hsn_code: svc.hsn_code,
-    });
+    };
+    if (opts.isInsuranceCovered === false) {
+      payload.is_insurance_covered = false;
+    }
+
+    const { error } = await supabase.from("bill_line_items").insert(payload);
     if (error) {
       toast({ title: "Failed to add service", description: error.message, variant: "destructive" });
       return;
@@ -142,6 +164,49 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
     setServiceSearch("");
     onRefresh();
     toast({ title: `Added: ${svc.name}` });
+  };
+
+  const addServiceItem = async (svc: any) => {
+    if (!hospitalId) return;
+
+    // ── Pre-auth ceiling enforcement (IPD insurance bills only) ──────────────
+    if (bill.bill_type === "ipd" && bill.admission_id && preAuthCeiling) {
+      const rate = Number(svc.fee) || 0;
+      const itemType = VALID_ITEM_TYPES.includes(svc.item_type) ? svc.item_type : "other";
+      const gstPct =
+        svc.gst_percent != null && svc.gst_percent > 0
+          ? Number(svc.gst_percent)
+          : getDefaultGSTRate(itemType, rate);
+      const newItemTotal = roundCurrency(rate + rate * gstPct / 100);
+
+      const runningNow = roundCurrency(
+        lineItems.reduce((s, i) => s + Number(i.total_amount), 0)
+      );
+      const projectedTotal = roundCurrency(runningNow + newItemTotal);
+      const ceiling = preAuthCeiling.ceiling;
+
+      if (projectedTotal > ceiling) {
+        // Hard block — open enhancement modal
+        setEnhancementBlocked({ svc, total: newItemTotal });
+        setShowSearch(false);
+        setServiceSearch("");
+        return;
+      }
+
+      // Yellow warning when crossing the 80 % threshold
+      if (
+        projectedTotal >= ceiling * 0.8 &&
+        runningNow < ceiling * 0.8
+      ) {
+        const pct = Math.round((projectedTotal / ceiling) * 100);
+        toast({
+          title: `Running bill is at ${pct}% of approved pre-auth amount`,
+          description: `${formatINR(projectedTotal)} of ${formatINR(ceiling)} approved by ${preAuthCeiling.tpaName || "TPA"}. Consider filing an enhancement request now.`,
+        });
+      }
+    }
+
+    await insertServiceLine(svc);
   };
 
   const addCustomItem = async (desc: string) => {
@@ -206,8 +271,43 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
   const patientPayable = grossTotal - bill.advance_received - bill.insurance_amount;
   const balanceDue = patientPayable - bill.paid_amount;
 
+  // Ceiling meter (derived from live lineItems to stay in sync)
+  const ceilingRunningTotal = roundCurrency(lineItems.reduce((s, i) => s + Number(i.total_amount), 0));
+  const ceilingPct = preAuthCeiling && preAuthCeiling.ceiling > 0
+    ? Math.min(100, (ceilingRunningTotal / preAuthCeiling.ceiling) * 100)
+    : 0;
+  const ceilingBreached = preAuthCeiling != null && ceilingRunningTotal >= preAuthCeiling.ceiling;
+  const ceilingWarning = preAuthCeiling != null && !ceilingBreached && ceilingPct >= 80;
+
   return (
     <div className="flex flex-col h-full">
+      {/* Pre-auth ceiling status bar — shown at 80 %+ for IPD insurance bills */}
+      {preAuthCeiling && (ceilingWarning || ceilingBreached) && (
+        <div
+          className={cn(
+            "px-4 py-2 flex items-center gap-2 text-sm flex-shrink-0 border-b",
+            ceilingBreached
+              ? "bg-destructive/10 border-destructive/20 text-destructive"
+              : "bg-amber-50 border-amber-200 text-amber-800"
+          )}
+        >
+          {ceilingBreached ? <ShieldAlert size={15} /> : <AlertTriangle size={15} />}
+          <span className="font-semibold">
+            {ceilingBreached
+              ? `Pre-auth ceiling reached — ${formatINR(ceilingRunningTotal)} of ${formatINR(preAuthCeiling.ceiling)} approved`
+              : `Running bill at ${Math.round(ceilingPct)}% of ${formatINR(preAuthCeiling.ceiling)} pre-auth ceiling`}
+          </span>
+          {!ceilingBreached && (
+            <span className="ml-auto text-xs opacity-75">
+              Headroom: {formatINR(roundCurrency(preAuthCeiling.ceiling - ceilingRunningTotal))} — consider filing an enhancement
+            </span>
+          )}
+          {preAuthCeiling.tpaName && (
+            <span className="text-xs opacity-60">· {preAuthCeiling.tpaName}</span>
+          )}
+        </div>
+      )}
+
       {/* Auto-pull banner */}
       {(bill.encounter_id || bill.admission_id) && lineItems.some((i) => i.source_module) && (
         <div className="bg-primary/5 border-l-[3px] border-l-primary px-4 py-2.5 text-xs text-primary flex-shrink-0">
@@ -375,6 +475,30 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
           hospitalId={hospitalId}
           onClose={() => setShowUnbilled(false)}
           onAdded={onRefresh}
+        />
+      )}
+
+      {/* Pre-auth ceiling breach — enhancement request modal */}
+      {enhancementBlocked && preAuthCeiling && hospitalId && bill.admission_id && (
+        <EnhancementRequestModal
+          hospitalId={hospitalId}
+          admissionId={bill.admission_id}
+          preAuthId={preAuthCeiling.preAuthId}
+          preAuthNumber={preAuthCeiling.preAuthNumber}
+          tpaName={preAuthCeiling.tpaName}
+          currentApproved={preAuthCeiling.ceiling}
+          runningTotal={ceilingRunningTotal}
+          serviceName={enhancementBlocked.svc.name}
+          serviceAmount={enhancementBlocked.total}
+          onMarkPatientPayable={async () => {
+            setEnhancementBlocked(null);
+            await insertServiceLine(enhancementBlocked.svc, { isInsuranceCovered: false });
+            toast({
+              title: `${enhancementBlocked.svc.name} marked as patient payable`,
+              description: "This charge is excluded from the TPA claim.",
+            });
+          }}
+          onClose={() => setEnhancementBlocked(null)}
         />
       )}
 

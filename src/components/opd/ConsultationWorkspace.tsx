@@ -556,20 +556,40 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
   const handleComplete = async () => {
     if (!encounterId) return;
 
-    // Hard block: check for unbilled investigations
-    const [labRes, radRes] = await Promise.all([
-      supabase.from("lab_orders").select("lab_order_items(lab_test_master(test_name))").eq("encounter_id", encounterId),
-      supabase.from("radiology_orders").select("study_name").eq("encounter_id", encounterId),
+    // Sync any prescription investigations to real DB rows (unbilled) before the revenue check.
+    // This ensures the DB is authoritative — no clinical order lives only in JSON.
+    await syncInvestigationOrders(prescription, encounterId);
+
+    // Hard block: query DB directly for any unbilled investigation rows linked to this
+    // encounter. Checking only prescription JSON can be bypassed by clearing the
+    // prescription — the DB is authoritative.
+    const [unbilledLabRes, unbilledRadRes] = await Promise.all([
+      (supabase as any).from("lab_orders")
+        .select("id, lab_order_items(lab_test_master(test_name))", { count: "exact", head: false })
+        .eq("encounter_id", encounterId)
+        .eq("hospital_id", hospitalId)
+        .eq("billing_status", "unbilled"),
+      (supabase as any).from("radiology_orders")
+        .select("id, study_name", { count: "exact", head: false })
+        .eq("encounter_id", encounterId)
+        .eq("hospital_id", hospitalId)
+        .eq("billing_status", "unbilled"),
     ]);
-    const orderedLab = new Set<string>();
-    labRes.data?.forEach((o: any) => o.lab_order_items?.forEach((i: any) => { if (i.lab_test_master?.test_name) orderedLab.add(i.lab_test_master.test_name.toLowerCase()); }));
-    const orderedRad = new Set((radRes.data || []).map(r => r.study_name.toLowerCase()));
 
-    const unbilledLab = prescription.lab_orders.filter(l => !orderedLab.has(l.test_name.toLowerCase()));
-    const unbilledRad = prescription.radiology_orders.filter(r => !orderedRad.has(r.study_name.toLowerCase()));
+    const unbilledLabCount = (unbilledLabRes.data || []).length;
+    const unbilledRadCount = (unbilledRadRes.data || []).length;
 
-    if (unbilledLab.length > 0 || unbilledRad.length > 0) {
-      toast({ title: `Revenue Protection Alert: ${unbilledLab.length + unbilledRad.length} unbilled investigation(s) found. Please bill them or remove them from the prescription before completing.`, variant: "destructive" });
+    if (unbilledLabCount > 0 || unbilledRadCount > 0) {
+      const labNames = (unbilledLabRes.data || [])
+        .flatMap((o: any) => (o.lab_order_items || []).map((i: any) => i.lab_test_master?.test_name).filter(Boolean))
+        .join(", ");
+      const radNames = (unbilledRadRes.data || []).map((o: any) => o.study_name).join(", ");
+      const allNames = [labNames, radNames].filter(Boolean).join(", ");
+      toast({
+        title: `Revenue Protection: ${unbilledLabCount + unbilledRadCount} unbilled investigation order(s) exist for this encounter.`,
+        description: `Bill via Order Lab / Order Radiology before completing: ${allNames}`,
+        variant: "destructive",
+      });
       return;
     }
 

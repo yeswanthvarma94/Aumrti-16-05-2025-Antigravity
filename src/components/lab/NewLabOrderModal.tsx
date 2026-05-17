@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { X, Search, ArrowLeft, CheckCircle2, Printer, IndianRupee, Loader2 } from "lucide-react";
 import { generateBillNumber } from "@/hooks/useBillNumber";
 import { autoPostJournalEntry } from "@/lib/accounting";
+import { logNABHEvidence } from "@/lib/nabh-evidence";
 import { printDocument } from "@/lib/printUtils";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -380,6 +381,8 @@ const NewLabOrderModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, pre
         encounter_id: linkedEncounter,
         admission_id: linkedAdmission,
         status: "ordered",
+        billing_status: "billed",
+        ordered_at: new Date().toISOString(),
       }).select("id").maybeSingle();
       if (orderErr || !order) throw orderErr || new Error("Failed to create order");
 
@@ -467,6 +470,13 @@ const NewLabOrderModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, pre
         });
       }
 
+      await logNABHEvidence(
+        hospitalId,
+        "COP.6",
+        `Lab order created and billed (IPD): ${selectedTests.map(t => t.test_name).join(", ")} for patient ${selectedPatient!.full_name}`,
+        "compliant"
+      );
+
       toast({ title: `✓ Lab order created — Bill generated & charged to IPD` });
       onCreated();
 
@@ -503,7 +513,7 @@ const NewLabOrderModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, pre
         patient_id: selectedPatient!.id,
         encounter_id: linkedEncounter || null,
         bill_number: billNumber,
-        bill_type: "opd",
+        bill_type: "lab",
         bill_date: today,
         bill_status: "final",
         payment_status: "paid",
@@ -562,7 +572,7 @@ const NewLabOrderModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, pre
         }))
       );
 
-      // 3. Create lab order (status: ordered, payment_status: paid)
+      // 3. Create lab order (billing_status: billed — payment was just collected above)
       const { data: order, error: orderErr } = await supabase.from("lab_orders").insert({
         hospital_id: hospitalId,
         patient_id: selectedPatient!.id,
@@ -572,6 +582,8 @@ const NewLabOrderModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, pre
         encounter_id: linkedEncounter,
         admission_id: null,
         status: "ordered",
+        billing_status: "billed",
+        ordered_at: new Date().toISOString(),
       }).select("id").maybeSingle();
       if (orderErr || !order) throw orderErr || new Error("Lab order creation failed");
 
@@ -602,6 +614,13 @@ const NewLabOrderModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, pre
           patient_id: selectedPatient!.id,
         });
       }
+
+      await logNABHEvidence(
+        hospitalId,
+        "COP.6",
+        `Lab order created and billed (OPD): ${selectedTests.map(t => t.test_name).join(", ")} for patient ${selectedPatient!.full_name}`,
+        "compliant"
+      );
 
       setCreatedBillNumber(billNumber);
       setStep("success");
