@@ -6,7 +6,8 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, X, Bot, Loader2, Library, Plus, DollarSign, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Check, X, Bot, Loader2, Library, Plus, DollarSign, AlertTriangle, CheckCircle2, Lock } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { callAI } from "@/lib/aiProvider";
 import { toast } from "sonner";
@@ -16,7 +17,10 @@ const statusColors: Record<string, string> = {
   coded: "bg-blue-100 text-blue-700",
   validated: "bg-green-100 text-green-700",
   billed: "bg-gray-100 text-gray-600",
+  mrd_locked: "bg-violet-100 text-violet-700",
 };
+
+const MRD_LOCK_ROLES = ["mrd_officer", "super_admin", "hospital_admin"];
 
 interface AISuggestion {
   primary_code: string;
@@ -50,7 +54,20 @@ const ICDCodingTab: React.FC<Props> = ({ hospitalId, onRefresh }) => {
   // Revenue impact state
   const [revenueImpact, setRevenueImpact] = useState<{ amount: number; scheme: string } | null>(null);
 
+  // MRD lock state
+  const [lockJustification, setLockJustification] = useState("");
+  const [locking, setLocking] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
+
   useEffect(() => { if (hospitalId) fetchItems(); }, [filter, hospitalId]);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      (supabase as any).from("users").select("role").eq("auth_user_id", user.id).maybeSingle()
+        .then(({ data }: any) => { if (data?.role) setUserRole(data.role); });
+    });
+  }, []);
 
   const fetchItems = async () => {
     if (!hospitalId) return;
@@ -385,6 +402,25 @@ Return ONLY valid JSON (no markdown, no explanation):
     onRefresh?.();
   };
 
+  const lockICD = async () => {
+    if (!selected || !lockJustification.trim()) {
+      toast.error("Justification is required to lock the ICD code");
+      return;
+    }
+    setLocking(true);
+    const { error } = await (supabase as any).from("icd_codings").update({
+      status: "mrd_locked",
+      mrd_justification: lockJustification.trim(),
+    }).eq("id", selected.id);
+    if (error) { toast.error(error.message); setLocking(false); return; }
+    toast.success("ICD code locked ✓ — PMJAY claim submission now unblocked");
+    setLockJustification("");
+    setSelected(null);
+    fetchItems();
+    onRefresh?.();
+    setLocking(false);
+  };
+
   const confidenceColor = (c: number) => {
     if (c >= 0.8) return "text-green-700";
     if (c >= 0.6) return "text-amber-600";
@@ -395,11 +431,12 @@ Return ONLY valid JSON (no markdown, no explanation):
     <div className="flex gap-3 h-full">
       {/* Left panel - queue */}
       <div className="w-[300px] flex flex-col border rounded-lg bg-card">
-        <Tabs value={filter} onValueChange={setFilter} className="p-2">
-          <TabsList className="w-full">
+        <Tabs value={filter} onValueChange={(v) => { setFilter(v); setSelected(null); setLockJustification(""); }} className="p-2">
+          <TabsList className="w-full flex-wrap h-auto gap-0.5">
             <TabsTrigger value="pending" className="flex-1 text-xs">Pending</TabsTrigger>
             <TabsTrigger value="coded" className="flex-1 text-xs">Coded</TabsTrigger>
             <TabsTrigger value="validated" className="flex-1 text-xs">Validated</TabsTrigger>
+            <TabsTrigger value="mrd_locked" className="flex-1 text-xs">Locked</TabsTrigger>
             <TabsTrigger value="all" className="flex-1 text-xs">All</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -537,42 +574,102 @@ Return ONLY valid JSON (no markdown, no explanation):
               </div>
             )}
 
-            {/* Primary ICD-10 */}
-            <div className="space-y-2">
-              <Label className="text-xs">Primary ICD-10 Code</Label>
-              <Input value={primaryCode} onChange={(e) => setPrimaryCode(e.target.value)} placeholder="e.g. J18.9" />
-              <Input value={primaryDesc} onChange={(e) => setPrimaryDesc(e.target.value)} placeholder="Description" />
-            </div>
-
-            {/* Secondary Codes */}
-            {secondaryCodes.length > 0 && (
-              <div className="space-y-2">
-                <Label className="text-xs">Secondary ICD-10 Codes</Label>
-                <div className="space-y-1">
-                  {secondaryCodes.map((sc) => (
-                    <div key={sc.code} className="flex items-center justify-between bg-muted rounded px-2 py-1">
-                      <span className="text-xs font-medium">{sc.code} — {sc.description}</span>
-                      <Button size="sm" variant="ghost" className="h-5 text-[10px] text-destructive" onClick={() => removeSecondaryCode(sc.code)}>
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
+            {/* Locked read-only view */}
+            {selected.status === "mrd_locked" ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 bg-violet-50 dark:bg-violet-950/20 border border-violet-200 rounded-lg px-3 py-2">
+                  <Lock className="h-4 w-4 text-violet-600 shrink-0" />
+                  <span className="text-sm font-semibold text-violet-700">MRD Locked — Read Only</span>
+                  {selected.mrd_locked_at && (
+                    <span className="text-[10px] text-muted-foreground ml-auto">
+                      {new Date(selected.mrd_locked_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                    </span>
+                  )}
                 </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Primary ICD-10 Code</Label>
+                  <Input value={selected.primary_icd_code || "—"} readOnly className="bg-muted/40 cursor-not-allowed" />
+                  <Input value={selected.primary_icd_desc || "—"} readOnly className="bg-muted/40 cursor-not-allowed" />
+                </div>
+                {selected.mrd_justification && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">MRD Justification</Label>
+                    <div className="text-sm bg-muted/40 rounded-md px-3 py-2 text-muted-foreground leading-relaxed">
+                      {selected.mrd_justification}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
+            ) : (
+              <>
+                {/* Primary ICD-10 */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Primary ICD-10 Code</Label>
+                  <Input value={primaryCode} onChange={(e) => setPrimaryCode(e.target.value)} placeholder="e.g. J18.9" />
+                  <Input value={primaryDesc} onChange={(e) => setPrimaryDesc(e.target.value)} placeholder="Description" />
+                </div>
 
-            <div className="space-y-2">
-              <Label className="text-xs">Procedure Code (PCS)</Label>
-              <Input value={pcsCode} onChange={(e) => setPcsCode(e.target.value)} placeholder="Optional procedure code" />
-            </div>
-            <div className="flex gap-2 pt-2">
-              <Button size="sm" onClick={() => saveCoding(false)} disabled={saving || !primaryCode}>
-                Save Coding
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => saveCoding(true)} disabled={saving || !primaryCode}>
-                Validate & Finalise
-              </Button>
-            </div>
+                {/* Secondary Codes */}
+                {secondaryCodes.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-xs">Secondary ICD-10 Codes</Label>
+                    <div className="space-y-1">
+                      {secondaryCodes.map((sc) => (
+                        <div key={sc.code} className="flex items-center justify-between bg-muted rounded px-2 py-1">
+                          <span className="text-xs font-medium">{sc.code} — {sc.description}</span>
+                          <Button size="sm" variant="ghost" className="h-5 text-[10px] text-destructive" onClick={() => removeSecondaryCode(sc.code)}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label className="text-xs">Procedure Code (PCS)</Label>
+                  <Input value={pcsCode} onChange={(e) => setPcsCode(e.target.value)} placeholder="Optional procedure code" />
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <Button size="sm" onClick={() => saveCoding(false)} disabled={saving || !primaryCode}>
+                    Save Coding
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => saveCoding(true)} disabled={saving || !primaryCode}>
+                    Validate & Finalise
+                  </Button>
+                </div>
+
+                {/* Lock ICD section — MRD officer only, after coding is done */}
+                {(selected.status === "coded" || selected.status === "validated") &&
+                  userRole && MRD_LOCK_ROLES.includes(userRole) && (
+                  <div className="border-t border-border pt-3 mt-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Lock className="h-3.5 w-3.5 text-violet-600" />
+                      <span className="text-xs font-semibold text-violet-700">Lock ICD (MRD Final)</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Once locked, the code becomes immutable and PMJAY claim submission is unblocked.
+                    </p>
+                    <Textarea
+                      value={lockJustification}
+                      onChange={(e) => setLockJustification(e.target.value)}
+                      placeholder="MRD justification for the final ICD selection (required)..."
+                      rows={2}
+                      className="text-xs resize-none"
+                    />
+                    <Button
+                      size="sm"
+                      className="gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+                      onClick={lockICD}
+                      disabled={locking || !lockJustification.trim() || !primaryCode}
+                    >
+                      <Lock className="h-3 w-3" />
+                      {locking ? "Locking..." : "Lock ICD"}
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

@@ -100,6 +100,7 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
   const [isExtensionForm, setIsExtensionForm] = useState(false);
   const [parentPreAuthId, setParentPreAuthId] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiPreAuthLoading, setAiPreAuthLoading] = useState(false);
   const [approvalScore, setApprovalScore] = useState<{ score: number; risk: string; recommendation: string } | null>(null);
 
   // Intimation section state
@@ -332,6 +333,48 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
       procedure_codes: (pa.procedure_codes || []).join(", "),
       notes: pa.notes || "",
     });
+  };
+
+  const generatePreAuthWithAI = async () => {
+    if (!selected || !hospitalId) return;
+    setAiPreAuthLoading(true);
+    try {
+      const { error } = await supabase.functions.invoke("insurance-automation", {
+        body: {
+          action: "ai_generate_preauth",
+          pre_auth_id: selected.id,
+          admission_id: selected.admission_id,
+          hospital_id: hospitalId,
+          patient_id: selected.patient_id,
+        },
+      });
+      if (error) throw error;
+      await loadData();
+      const { data: updated } = await (supabase as any)
+        .from("insurance_pre_auth").select("*").eq("id", selected.id).maybeSingle();
+      if (updated) {
+        const pa: PreAuth = {
+          ...selected,
+          diagnosis_codes: updated.diagnosis_codes || [],
+          procedure_codes: updated.procedure_codes || [],
+          estimated_amount: updated.estimated_amount ? Number(updated.estimated_amount) : null,
+          notes: updated.notes || null,
+        };
+        setSelected(pa);
+        setFormState((prev: any) => ({
+          ...prev,
+          diagnosis_codes: (updated.diagnosis_codes || []).join(", "),
+          procedure_codes: (updated.procedure_codes || []).join(", "),
+          estimated_amount: updated.estimated_amount ? Number(updated.estimated_amount) : "",
+          notes: updated.notes || "",
+        }));
+      }
+      toast({ title: "AI pre-auth fields generated", description: "Review the populated fields and submit when ready." });
+    } catch (e: any) {
+      toast({ title: "AI generation failed", description: e?.message || "Try again", variant: "destructive" });
+    } finally {
+      setAiPreAuthLoading(false);
+    }
   };
 
   const openExtensionForm = (pa: PreAuth) => {
@@ -602,6 +645,44 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
         ) : (
           <div className="max-w-2xl space-y-4">
             <h3 className="text-base font-bold">{formTitle}</h3>
+
+            {/* ── AI GENERATE PRE-AUTH — existing records with an admission only ── */}
+            {selected && (selected.status === "pending" || selected.status === "draft") && selected.admission_id && (
+              <div className="border border-violet-200 rounded-lg p-3 bg-violet-50/40">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-violet-800 flex items-center gap-1.5">
+                      <Sparkles size={14} /> Generate with AI
+                    </p>
+                    <p className="text-xs text-violet-600 mt-0.5">
+                      Auto-fill ICD codes, procedure codes and estimated amount from admission data.
+                      Overwrites current values — review before submitting.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0 text-xs gap-1.5 border-violet-300 text-violet-700 hover:bg-violet-100"
+                    disabled={aiPreAuthLoading}
+                    onClick={generatePreAuthWithAI}
+                  >
+                    {aiPreAuthLoading
+                      ? <><Loader2 size={12} className="animate-spin" /> Generating…</>
+                      : <><Sparkles size={12} /> Generate with AI</>}
+                  </Button>
+                </div>
+                {aiPreAuthLoading && (
+                  <p className="text-xs text-violet-500 mt-2 animate-pulse">
+                    Analysing admission diagnosis, fetching ICD codes and estimating amount…
+                  </p>
+                )}
+              </div>
+            )}
+            {isNewForm && formState.admission_id && (
+              <p className="text-xs text-muted-foreground">
+                Save as Draft first to enable AI pre-auth generation.
+              </p>
+            )}
 
             {/* ── TPA RESPONSE (submitted / under_review pre-auths only) ── */}
             {selected && (selected.status === "submitted" || selected.status === "under_review") && (

@@ -89,15 +89,38 @@ const IntimateNowPopover: React.FC<{
   const confirm = async () => {
     if (!hospitalId) return;
     setSaving(true);
+    const sentAt = new Date(intimationTime).toISOString();
+
+    await Promise.all([
+      // Primary: update pre-auth row (existing behaviour)
+      (supabase as any)
+        .from("insurance_pre_auth")
+        .update({
+          intimation_sent_at: sentAt,
+          intimation_method: method,
+          is_emergency_admission: admType === "emergency",
+        })
+        .eq("admission_id", row.id)
+        .eq("hospital_id", hospitalId),
+
+      // Mirror: update insurance_intimations so the Intimations tab stays in sync.
+      // Upserts the most recent pending/failed row; no-ops if already sent/acknowledged.
+      (supabase as any)
+        .from("insurance_intimations")
+        .update({ status: "sent", sent_at: sentAt })
+        .eq("admission_id", row.id)
+        .eq("hospital_id", hospitalId)
+        .in("status", ["pending", "failed"]),
+    ]);
+
+    // Dismiss any open CRITICAL intimation alerts for this admission
     await (supabase as any)
-      .from("insurance_pre_auth")
-      .update({
-        intimation_sent_at: new Date(intimationTime).toISOString(),
-        intimation_method: method,
-        is_emergency_admission: admType === "emergency",
-      })
-      .eq("admission_id", row.id)
-      .eq("hospital_id", hospitalId);
+      .from("clinical_alerts")
+      .update({ is_acknowledged: true, acknowledged_at: new Date().toISOString() })
+      .eq("hospital_id", hospitalId)
+      .in("alert_type", ["intimation_send_failure", "intimation_deadline_approaching"])
+      .eq("is_acknowledged", false);
+
     toast({ title: "Intimation recorded ✓" });
     setSaving(false);
     setOpen(false);

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
-import { Building2, ClipboardList, Send, BarChart3, CalendarClock, Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal } from "lucide-react";
+import { Building2, ClipboardList, Send, BarChart3, CalendarClock, Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal, TrendingUp, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ActiveAdmissions from "@/components/insurance/ActiveAdmissions";
 import PreAuthQueue from "@/components/insurance/PreAuthQueue";
@@ -16,20 +16,27 @@ import ESISchemeTab from "@/components/insurance/ESISchemeTab";
 import TPAQueriesTab from "@/components/insurance/TPAQueriesTab";
 import AutomationStatusPipeline from "@/components/insurance/AutomationStatusPipeline";
 import InsuranceAutomationSettings from "@/components/insurance/InsuranceAutomationSettings";
+import EnhancementQueue from "@/components/insurance/EnhancementQueue";
+import IntimationsTab from "@/components/insurance/IntimationsTab";
+
+const ENHANCEMENT_ROLES = ["insurance_executive", "super_admin", "hospital_admin"];
 
 const navItems = [
-  { key: "admissions", label: "Active Admissions", icon: Building2 },
-  { key: "preauth", label: "Pre-Auth Queue", icon: ClipboardList },
-  { key: "submit", label: "Claims to Submit", icon: Send },
-  { key: "status", label: "Claims Status", icon: BarChart3 },
-  { key: "ageing", label: "TPA Ageing", icon: CalendarClock },
-  { key: "unified", label: "Unified View", icon: Layers },
-  { key: "cghs_echs", label: "CGHS / ECHS", icon: ShieldCheck },
-  { key: "esi", label: "ESI Scheme", icon: ShieldCheck },
-  { key: "queries", label: "TPA Queries", icon: MessageSquare },
-  { key: "config", label: "TPA Configuration", icon: Settings2 },
-  { key: "automation", label: "Automation", icon: Bot },
-  { key: "auto_settings", label: "Auto Settings", icon: SlidersHorizontal },
+  { key: "admissions", label: "Active Admissions", icon: Building2, roles: null },
+  { key: "intimations", label: "Intimations", icon: Bell, roles: null },
+  { key: "preauth", label: "Pre-Auth Queue", icon: ClipboardList, roles: null },
+  { key: "submit", label: "Claims to Submit", icon: Send, roles: null },
+  { key: "status", label: "Claims Status", icon: BarChart3, roles: null },
+  { key: "ageing", label: "TPA Ageing", icon: CalendarClock, roles: null },
+  { key: "unified", label: "Unified View", icon: Layers, roles: null },
+  { key: "cghs_echs", label: "CGHS / ECHS", icon: ShieldCheck, roles: null },
+  { key: "esi", label: "ESI Scheme", icon: ShieldCheck, roles: null },
+  { key: "queries", label: "TPA Queries", icon: MessageSquare, roles: null },
+  { key: "config", label: "TPA Configuration", icon: Settings2, roles: null },
+  { key: "automation", label: "Automation", icon: Bot, roles: null },
+  { key: "auto_settings", label: "Auto Settings", icon: SlidersHorizontal, roles: null },
+  // Enhancement Queue: visible only to insurance_executive and admins
+  { key: "enhancement_queue", label: "Enhancement Queue", icon: TrendingUp, roles: ENHANCEMENT_ROLES },
 ];
 
 interface AdmissionContext {
@@ -42,12 +49,25 @@ interface AdmissionContext {
 const InsurancePage: React.FC = () => {
   const [activeNav, setActiveNav] = useState("admissions");
   const [kpis, setKpis] = useState({ pendingPreAuth: 0, outstandingClaims: 0, deniedThisMonth: 0, automationPct: 0 });
+  const [pendingEnhancements, setPendingEnhancements] = useState(0);
+  const [failedIntimations, setFailedIntimations] = useState(0);
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [pendingAdmission, setPendingAdmission] = useState<AdmissionContext | null>(null);
   const { toast } = useToast();
   const { hospitalId } = useHospitalId();
 
   useEffect(() => {
     loadKPIs();
+    // Fetch user role for tab visibility gating
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      (supabase as any)
+        .from("users")
+        .select("role")
+        .eq("auth_user_id", user.id)
+        .maybeSingle()
+        .then(({ data }: { data: any }) => { if (data?.role) setUserRole(data.role); });
+    });
   }, [hospitalId]);
 
   const loadKPIs = async () => {
@@ -113,6 +133,22 @@ const InsurancePage: React.FC = () => {
         deniedThisMonth: deniedRes.count || 0,
         automationPct,
       });
+
+      // Enhancement queue badge (insurance_executive facing)
+      const { count: enhCount } = await (supabase as any)
+        .from("insurance_enhancement_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("hospital_id", hospitalId)
+        .eq("status", "pending");
+      setPendingEnhancements(enhCount || 0);
+
+      // Intimations failure badge
+      const { count: intimFailCount } = await (supabase as any)
+        .from("insurance_intimations")
+        .select("id", { count: "exact", head: true })
+        .eq("hospital_id", hospitalId)
+        .in("status", ["failed", "pending"]);
+      setFailedIntimations(intimFailCount || 0);
     } catch { /* ignore */ }
   };
 
@@ -128,6 +164,7 @@ const InsurancePage: React.FC = () => {
   const renderContent = () => {
     switch (activeNav) {
       case "admissions": return <ActiveAdmissions onNavigate={handleNavigate} />;
+      case "intimations": return <IntimationsTab />;
       case "preauth": return <PreAuthQueue initialAdmission={pendingAdmission} onAdmissionHandled={() => setPendingAdmission(null)} />;
       case "submit": return <ClaimsToSubmit />;
       case "status": return <ClaimsStatus />;
@@ -139,6 +176,7 @@ const InsurancePage: React.FC = () => {
       case "config": return <TPAConfiguration />;
       case "automation": return <AutomationStatusPipeline />;
       case "auto_settings": return <InsuranceAutomationSettings />;
+      case "enhancement_queue": return <EnhancementQueue />;
       default: return null;
     }
   };
@@ -162,30 +200,57 @@ const InsurancePage: React.FC = () => {
           <span className="text-xs px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 font-medium flex items-center gap-1">
             <Bot size={11} /> Auto: {kpis.automationPct}%
           </span>
+          {pendingEnhancements > 0 && userRole && ENHANCEMENT_ROLES.includes(userRole) && (
+            <button
+              onClick={() => setActiveNav("enhancement_queue")}
+              className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-semibold border border-amber-200 hover:bg-amber-200 transition-colors"
+            >
+              {pendingEnhancements} enhancement{pendingEnhancements > 1 ? "s" : ""} pending
+            </button>
+          )}
         </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         <nav className="w-[240px] bg-background border-r border-border flex-shrink-0 flex flex-col py-2">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeNav === item.key;
-            return (
-              <button
-                key={item.key}
-                onClick={() => handleNavigate(item.key)}
-                className={cn(
-                  "flex items-center gap-3 h-12 px-4 text-[13px] font-medium transition-colors text-left w-full",
-                  isActive
-                    ? "bg-primary/5 text-primary border-l-[3px] border-primary"
-                    : "text-muted-foreground hover:bg-muted/50 border-l-[3px] border-transparent"
-                )}
-              >
-                <Icon size={18} className="shrink-0" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+          {navItems
+            .filter((item) =>
+              item.roles === null ||
+              (userRole !== null && item.roles.includes(userRole))
+            )
+            .map((item) => {
+              const Icon = item.icon;
+              const isActive = activeNav === item.key;
+              const badge =
+                item.key === "enhancement_queue" && pendingEnhancements > 0 ? pendingEnhancements :
+                item.key === "intimations" && failedIntimations > 0 ? failedIntimations :
+                null;
+              return (
+                <button
+                  key={item.key}
+                  onClick={() => handleNavigate(item.key)}
+                  className={cn(
+                    "flex items-center gap-3 h-12 px-4 text-[13px] font-medium transition-colors text-left w-full",
+                    isActive
+                      ? "bg-primary/5 text-primary border-l-[3px] border-primary"
+                      : "text-muted-foreground hover:bg-muted/50 border-l-[3px] border-transparent"
+                  )}
+                >
+                  <Icon size={18} className="shrink-0" />
+                  <span className="flex-1">{item.label}</span>
+                  {badge !== null && (
+                    <span className={cn(
+                      "text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none",
+                      item.key === "intimations"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-amber-100 text-amber-700"
+                    )}>
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
         </nav>
 
         <div className="flex-1 overflow-hidden bg-muted/30">

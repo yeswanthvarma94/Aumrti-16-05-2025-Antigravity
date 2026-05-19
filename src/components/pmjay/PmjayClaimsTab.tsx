@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
 import { Coins, Bot, Copy, Printer, AlertTriangle, Send } from "lucide-react";
 import { callAI } from "@/lib/aiProvider";
+import { autoPostJournalEntry } from "@/lib/accounting";
 
 interface Claim {
   id: string;
@@ -52,6 +53,7 @@ const PmjayClaimsTab: React.FC = () => {
   const [appealModal, setAppealModal] = useState(false);
   const [appealText, setAppealText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => { loadData(); }, []);
@@ -71,6 +73,37 @@ const PmjayClaimsTab: React.FC = () => {
   };
 
   const filtered = filter === "all" ? claims : claims.filter(c => c.status === filter);
+
+  // ICD lock gate — called before any claim submission
+  const checkICDLock = async (admissionId: string): Promise<boolean> => {
+    const { data, error } = await (supabase as any).rpc("validate_pmjay_icd_before_claim", {
+      p_admission_id: admissionId,
+    });
+    if (error || !data) {
+      toast({
+        title: "PMJAY claim cannot be submitted",
+        description: "ICD code pending MRD validation. Ask the MRD officer to review and lock the ICD code first.",
+        variant: "destructive",
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const submitClaim = async () => {
+    if (!selected) return;
+    setSubmitting(true);
+    const locked = await checkICDLock(selected.admission_id);
+    if (!locked) { setSubmitting(false); return; }
+    await supabase.from("pmjay_claims").update({
+      status: "submitted",
+      submitted_at: new Date().toISOString(),
+    }).eq("id", selected.id);
+    toast({ title: "Claim submitted ✓" });
+    loadData();
+    setSelected(null);
+    setSubmitting(false);
+  };
 
   // FEATURE 3: AI Appeal Letter Generator
   const generateAppeal = async () => {
@@ -146,6 +179,8 @@ Hospital letterhead will be added. Just write the body content.`,
 
   const markResubmitted = async () => {
     if (!selected) return;
+    const locked = await checkICDLock(selected.admission_id);
+    if (!locked) return;
     await supabase.from("pmjay_claims").update({
       is_resubmitted: true,
       status: "submitted",
@@ -154,6 +189,34 @@ Hospital letterhead will be added. Just write the body content.`,
     toast({ title: "Claim resubmitted ✓" });
     loadData();
     setSelected(null);
+  };
+
+  // D8: Print claim bundle for NHA portal manual submission
+  const printClaimBundle = async (claim: Claim) => {
+    const { printDocument } = await import("@/lib/printUtils");
+    const patientName = patients[claim.patient_id] || "—";
+    const { data: adm } = await (supabase as any)
+      .from("admissions")
+      .select("admitted_at, discharged_at, patients(uhid)")
+      .eq("id", claim.admission_id)
+      .maybeSingle();
+    const uhid = (adm?.patients as any)?.uhid || "—";
+    const admDate = adm?.admitted_at ? new Date(adm.admitted_at).toLocaleDateString("en-IN") : "—";
+    const disDate = adm?.discharged_at ? new Date(adm.discharged_at).toLocaleDateString("en-IN") : "—";
+    printDocument("PMJAY Claim Bundle", `
+      <h2 style="color:#1A2F5A">PMJAY Claim Submission Bundle</h2>
+      <table style="border-collapse:collapse;width:100%;font-size:13px">
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Patient Name</td><td style="padding:6px;border:1px solid #ccc">${patientName}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">UHID</td><td style="padding:6px;border:1px solid #ccc">${uhid}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Claim Number</td><td style="padding:6px;border:1px solid #ccc">${claim.claim_number || "—"}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Package Code</td><td style="padding:6px;border:1px solid #ccc">${claim.package_code}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Package Name</td><td style="padding:6px;border:1px solid #ccc">${claim.package_name}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Claimed Amount</td><td style="padding:6px;border:1px solid #ccc">₹${claim.claimed_amount.toLocaleString("en-IN")}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Admission Date</td><td style="padding:6px;border:1px solid #ccc">${admDate}</td></tr>
+        <tr><td style="padding:6px;border:1px solid #ccc;font-weight:bold">Discharge Date</td><td style="padding:6px;border:1px solid #ccc">${disDate}</td></tr>
+      </table>
+      <p style="margin-top:16px;color:#7c3aed;font-size:12px">⚠ Submit this bundle to the NHA BIS portal to complete electronic claim submission.</p>
+    `);
   };
 
   // FEATURE 4: Billing integration — on claim settlement
@@ -169,14 +232,14 @@ Hospital letterhead will be added. Just write the body content.`,
     }).eq("id", selected.id);
 
     // Create bill payment if bill exists
-    if (selected.bill_id) {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: userData } = await supabase
-        .from("users")
-        .select("id, hospital_id")
-        .eq("auth_user_id", user?.id || "")
-        .maybeSingle();
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: userData } = await supabase
+      .from("users")
+      .select("id, hospital_id")
+      .eq("auth_user_id", user?.id || "")
+      .maybeSingle();
 
+    if (selected.bill_id) {
       await supabase.from("bill_payments").insert({
         hospital_id: userData?.hospital_id || "",
         bill_id: selected.bill_id,
@@ -186,23 +249,39 @@ Hospital letterhead will be added. Just write the body content.`,
         received_by: userData?.id || null,
       });
 
-      // Update bill payment status
+      // D3: fetch total_amount + advance_received to derive patient_payable if not already set
       const { data: billData } = await supabase
         .from("bills")
-        .select("paid_amount, patient_payable")
+        .select("paid_amount, patient_payable, total_amount, advance_received")
         .eq("id", selected.bill_id)
         .maybeSingle();
 
       if (billData) {
         const newPaid = (billData.paid_amount || 0) + settledAmt;
-        const newBalance = Math.max(0, (billData.patient_payable || 0) - newPaid);
+        const derivedPayable = (billData.patient_payable || 0) > 0
+          ? billData.patient_payable
+          : Math.max(0, (billData.total_amount || 0) - (billData.advance_received || 0) - settledAmt);
+        const newBalance = Math.max(0, derivedPayable - newPaid);
         await supabase.from("bills").update({
           paid_amount: newPaid,
+          insurance_amount: settledAmt,
+          patient_payable: derivedPayable,
           balance_due: newBalance,
           payment_status: newBalance <= 0 ? "paid" : "partial",
         }).eq("id", selected.bill_id);
       }
     }
+
+    // FIN2: post PMJAY settlement to GL (sourceId = pmjay_claim UUID — not a bills row, guard passes)
+    await autoPostJournalEntry({
+      triggerEvent: "pmjay_claim_settled",
+      sourceModule: "insurance",
+      sourceId: selected.id,
+      amount: settledAmt,
+      description: `PMJAY Settlement — ${selected.package_name} — Claim #${selected.claim_number || selected.id.slice(0, 8)}`,
+      hospitalId: userData?.hospital_id || "",
+      postedBy: user?.id || "",
+    });
 
     // Clear billing on admission
     if (selected.admission_id) {
@@ -284,6 +363,27 @@ Hospital letterhead will be added. Just write the body content.`,
               <div><span className="text-muted-foreground text-[11px]">Settled</span><br/>{selected.settled_amount ? `₹${selected.settled_amount.toLocaleString("en-IN")}` : "—"}</div>
               <div><span className="text-muted-foreground text-[11px]">Resubmitted</span><br/>{selected.is_resubmitted ? "Yes" : "No"}</div>
             </div>
+
+            {/* Draft — Submit Claim (with ICD lock gate) */}
+            {selected.status === "draft" && (
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 space-y-2">
+                <div className="text-sm font-semibold text-blue-700">Ready to Submit</div>
+                <p className="text-[12px] text-blue-600">
+                  The system verifies that the ICD code is MRD-locked before submitting this claim.
+                </p>
+                <div className="flex gap-2 flex-wrap">
+                  <Button size="sm" className="gap-1" onClick={submitClaim} disabled={submitting}>
+                    <Send size={13} /> {submitting ? "Checking ICD..." : "Submit Claim"}
+                  </Button>
+                  <Button size="sm" variant="outline" className="gap-1" onClick={() => printClaimBundle(selected)}>
+                    <Printer size={13} /> Print for Portal
+                  </Button>
+                </div>
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                  After marking submitted here, log into the NHA BIS portal to complete electronic submission.
+                </p>
+              </div>
+            )}
 
             {/* Denial section */}
             {selected.status === "rejected" && (

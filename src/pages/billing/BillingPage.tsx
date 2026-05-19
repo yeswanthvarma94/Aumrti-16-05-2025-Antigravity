@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { generateBillNumber } from "@/hooks/useBillNumber";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { autoPullAdmissionCharges as autoPullAdmissionChargesUtil } from "@/lib/ipdBilling";
+import { AlertTriangle, Lock } from "lucide-react";
 
 import BillQueue from "@/components/billing/BillQueue";
 import BillEditor from "@/components/billing/BillEditor";
@@ -43,8 +44,10 @@ export interface BillRecord {
 
 const BillingPage: React.FC = () => {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [hospitalId, setHospitalId] = useState<string | null>(null);
+  const [prevDayClosed, setPrevDayClosed] = useState<boolean | null>(null);
   const [bills, setBills] = useState<BillRecord[]>([]);
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,6 +71,23 @@ const BillingPage: React.FC = () => {
     };
     loadHospital();
   }, []);
+
+  // Check whether yesterday's cash closure is locked
+  useEffect(() => {
+    if (!hospitalId) return;
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yd = yesterday.toISOString().split("T")[0];
+    (supabase as any)
+      .from("daily_cash_closure")
+      .select("status")
+      .eq("hospital_id", hospitalId)
+      .eq("closure_date", yd)
+      .maybeSingle()
+      .then(({ data }: any) => {
+        setPrevDayClosed(data?.status === "locked");
+      });
+  }, [hospitalId]);
 
   // Handle discharge billing URL params: /billing?action=new&admission_id=X&type=ipd
   useEffect(() => {
@@ -306,8 +326,32 @@ const BillingPage: React.FC = () => {
     .reduce((s, b) => s + b.paid_amount, 0);
   const pendingAmount = bills.reduce((s, b) => s + b.balance_due, 0);
 
+  // Show time-based day-close reminder after 22:30
+  const now = new Date();
+  const isAfterClosingTime = now.getHours() > 22 || (now.getHours() === 22 && now.getMinutes() >= 30);
+  const yesterdayStr = new Date(now.setDate(now.getDate() - 1)).toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short",
+  });
+
   return (
     <div className="flex flex-col h-[calc(100vh-56px)] overflow-hidden">
+
+      {/* Day-not-closed banner */}
+      {prevDayClosed === false && (
+        <div className="flex-shrink-0 bg-destructive text-white px-4 py-1.5 flex items-center gap-3 text-[12px] font-semibold">
+          <AlertTriangle size={14} className="shrink-0" />
+          {isAfterClosingTime
+            ? `Day not closed! All transactions from ${yesterdayStr} require end-of-day closure before continuing.`
+            : `${yesterdayStr} is not closed. Complete cash reconciliation before end of day.`}
+          <button
+            className="ml-2 underline hover:no-underline text-white"
+            onClick={() => navigate("/billing/closure")}
+          >
+            Close Day Now →
+          </button>
+        </div>
+      )}
+
       {/* Tab bar */}
       <div className="h-10 flex-shrink-0 border-b border-border bg-background px-4 flex items-center gap-1">
         <button
@@ -328,6 +372,18 @@ const BillingPage: React.FC = () => {
           )}
           onClick={() => setActiveTab("pending")}
         >🔴 Pending Payments</button>
+        <div className="flex-1" />
+        <button
+          className={cn(
+            "px-3 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center gap-1",
+            prevDayClosed === false
+              ? "bg-destructive text-white animate-pulse"
+              : "text-muted-foreground hover:text-foreground border border-border"
+          )}
+          onClick={() => navigate("/billing/closure")}
+        >
+          <Lock size={11} /> Day Closure
+        </button>
       </div>
 
       {activeTab === "bills" ? (

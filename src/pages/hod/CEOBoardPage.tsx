@@ -3,7 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Users, Bed, TrendingUp, AlertTriangle, IndianRupee, Activity, Maximize2, Minimize2, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, Bed, TrendingUp, AlertTriangle, IndianRupee, Activity, Maximize2, Minimize2, RefreshCw, ChevronLeft, ChevronRight, ScanLine, Bot, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { format } from "date-fns";
 
 interface HospitalKPIs {
@@ -20,6 +21,8 @@ interface HospitalKPIs {
   criticalAlerts: number;
   labPendingToday: number;
   dischargesToday: number;
+  leakageAmount: number;
+  leakageItems: number;
   fetchedAt: number;
 }
 
@@ -47,16 +50,22 @@ const CEOBoardPage: React.FC = () => {
   const [tvMode, setTvMode] = useState(false);
   const [tvIndex, setTvIndex] = useState(0);
   const [groupFilter, setGroupFilter] = useState<string>("all");
+  const [digestOpen, setDigestOpen] = useState(false);
+  const [digestText, setDigestText] = useState<string | null>(null);
+  const [digestLoading, setDigestLoading] = useState(false);
   const tvTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastRefresh = useRef(new Date());
 
   const fetchKPIs = useCallback(async (hospitalList: { id: string; name: string; state: string | null; beds_count: number }[]) => {
     const today = new Date().toISOString().split("T")[0];
     const startOfToday = today + "T00:00:00";
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split("T")[0];
 
     const results: HospitalKPIs[] = await Promise.all(
       hospitalList.map(async (h) => {
-        const [opd, admitted, billsToday, claims, labPending, discharges] = await Promise.all([
+        const [opd, admitted, billsToday, claims, labPending, discharges, leakage] = await Promise.all([
           supabase.from("opd_tokens").select("id", { count: "exact", head: true })
             .eq("hospital_id", h.id).gte("created_at", startOfToday),
           supabase.from("admissions").select("id", { count: "exact", head: true })
@@ -69,6 +78,11 @@ const CEOBoardPage: React.FC = () => {
             .eq("hospital_id", h.id).eq("order_date", today).in("status", ["ordered", "sample_collected", "in_process"]),
           supabase.from("admissions").select("id", { count: "exact", head: true })
             .eq("hospital_id", h.id).eq("status", "discharged").gte("discharged_at", startOfToday),
+          (supabase as any).from("leakage_reports")
+            .select("total_items, estimated_amount")
+            .eq("hospital_id", h.id)
+            .eq("report_date", yesterdayStr)
+            .maybeSingle(),
         ]);
 
         const revenueToday = (billsToday.data || []).reduce((s: number, b: any) => s + Number(b.net_amount || 0), 0);
@@ -88,12 +102,53 @@ const CEOBoardPage: React.FC = () => {
           criticalAlerts: (labPending.count || 0) > 20 ? 1 : 0,
           labPendingToday: labPending.count || 0,
           dischargesToday: discharges.count || 0,
+          leakageAmount: Number(leakage.data?.estimated_amount || 0),
+          leakageItems: Number(leakage.data?.total_items || 0),
           fetchedAt: Date.now(),
         };
       })
     );
     return results;
   }, []);
+
+  const generateDigest = useCallback(async () => {
+    if (!hospitalId) return;
+    setDigestLoading(true);
+    try {
+      const today = format(new Date(), "yyyy-MM-dd");
+      const { data: existing } = await (supabase as any)
+        .from("ai_digests").select("digest_text")
+        .eq("hospital_id", hospitalId).eq("digest_date", today).maybeSingle();
+      if (existing?.digest_text) { setDigestText(existing.digest_text); return; }
+
+      const { data: hospData } = await supabase.from("hospitals").select("name").eq("id", hospitalId).maybeSingle();
+      const snapshot = {
+        opd_patients: hospitals.reduce((s, h) => s + h.opdToday, 0),
+        revenue_today: hospitals.reduce((s, h) => s + h.revenueToday, 0),
+        bed_occupancy_pct: pct(hospitals.reduce((s, h) => s + h.admittedNow, 0), hospitals.reduce((s, h) => s + h.beds_count, 0)),
+        occupied_beds: hospitals.reduce((s, h) => s + h.admittedNow, 0),
+        total_beds: hospitals.reduce((s, h) => s + h.beds_count, 0),
+        lab_pending: hospitals.reduce((s, h) => s + h.labPendingToday, 0),
+        critical_alerts: hospitals.reduce((s, h) => s + h.criticalAlerts, 0),
+      };
+      const { data: fnData, error } = await supabase.functions.invoke("ai-executive-digest", {
+        body: { hospital_name: (hospData as any)?.name || "Hospital", date: today, snapshot, anomalies: [] },
+      });
+      if (error) throw error;
+      const text = fnData?.digest_text;
+      if (!text) throw new Error("No digest returned");
+      await (supabase as any).from("ai_digests").upsert(
+        { hospital_id: hospitalId, digest_date: today, digest_text: text, kpi_snapshot: snapshot, anomalies: [], generated_at: new Date().toISOString() },
+        { onConflict: "hospital_id,digest_date" }
+      );
+      setDigestText(text);
+      toast.success("AI Digest generated");
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to generate digest");
+    } finally {
+      setDigestLoading(false);
+    }
+  }, [hospitalId, hospitals]);
 
   const load = useCallback(async () => {
     if (!hospitalId) return;
@@ -166,6 +221,8 @@ const CEOBoardPage: React.FC = () => {
   const totalRevenue = hospitals.reduce((s, h) => s + h.revenueToday, 0);
   const totalClaims = hospitals.reduce((s, h) => s + h.pendingClaims, 0);
   const totalBeds = hospitals.reduce((s, h) => s + h.beds_count, 0);
+  const totalLeakage = hospitals.reduce((s, h) => s + h.leakageAmount, 0);
+  const totalLeakageItems = hospitals.reduce((s, h) => s + h.leakageItems, 0);
 
   if (loading) return (
     <div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading CEO Board…</div>
@@ -260,12 +317,19 @@ const CEOBoardPage: React.FC = () => {
       <div className="p-4 space-y-4">
         {/* Chain-level aggregates */}
         {hospitals.length > 0 && (
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-6 gap-3">
             <KpiBox label="OPD Today (chain)" value={totalOPD} icon={<Users size={14} className="text-primary" />} />
             <KpiBox label="Beds Occupied" value={`${totalAdmitted}/${totalBeds}`} sub={`${pct(totalAdmitted, totalBeds)}% occupancy`} icon={<Bed size={14} className="text-blue-600" />} />
             <KpiBox label="Revenue Today" value={fmt(totalRevenue)} icon={<IndianRupee size={14} className="text-emerald-600" />} />
             <KpiBox label="Pending Claims" value={totalClaims} alert={totalClaims > 20} icon={<TrendingUp size={14} className={totalClaims > 20 ? "text-red-600" : "text-amber-600"} />} />
             <KpiBox label="Active Hospitals" value={hospitals.length} icon={<Activity size={14} className="text-primary" />} />
+            <KpiBox
+              label="Yesterday's Leakage"
+              value={totalLeakage > 0 ? fmt(totalLeakage) : "—"}
+              sub={totalLeakageItems > 0 ? `${totalLeakageItems} unbilled item(s)` : "No leakage detected"}
+              alert={totalLeakage > 0}
+              icon={<ScanLine size={14} className={totalLeakage > 0 ? "text-red-600" : "text-emerald-600"} />}
+            />
           </div>
         )}
 
@@ -282,6 +346,7 @@ const CEOBoardPage: React.FC = () => {
                 <th className="px-3 py-2 text-center">Lab Pending</th>
                 <th className="px-3 py-2 text-center">Discharges</th>
                 <th className="px-3 py-2 text-center">Claims Pending</th>
+                <th className="px-3 py-2 text-center">Leakage (Yesterday)</th>
                 <th className="px-3 py-2 text-center">Status</th>
               </tr>
             </thead>
@@ -322,7 +387,17 @@ const CEOBoardPage: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-3 py-2.5 text-center">
-                    {h.occupancyPct >= 90 || h.labPendingToday > 20 ? (
+                    {h.leakageAmount > 0 ? (
+                      <span className="text-xs font-mono font-bold text-red-600">
+                        {fmt(h.leakageAmount)}
+                        <span className="text-[9px] text-red-400 ml-1">({h.leakageItems})</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-600">✓ Clear</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    {h.occupancyPct >= 90 || h.labPendingToday > 20 || h.leakageAmount > 50000 ? (
                       <Badge variant="destructive" className="text-[9px]"><AlertTriangle size={8} className="mr-0.5" /> Attention</Badge>
                     ) : (
                       <Badge variant="outline" className="text-[9px] border-emerald-300 bg-emerald-50 text-emerald-700">Normal</Badge>
@@ -331,10 +406,52 @@ const CEOBoardPage: React.FC = () => {
                 </tr>
               ))}
               {hospitals.length === 0 && (
-                <tr><td colSpan={9} className="px-3 py-8 text-center text-xs text-muted-foreground">No hospital data available</td></tr>
+                <tr><td colSpan={10} className="px-3 py-8 text-center text-xs text-muted-foreground">No hospital data available</td></tr>
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* AI Executive Insights */}
+        <div className="border border-border rounded-lg overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-muted/50 hover:bg-muted/80 text-sm font-semibold transition-colors"
+            onClick={() => {
+              const opening = !digestOpen;
+              setDigestOpen(opening);
+              if (opening && !digestText) generateDigest();
+            }}
+          >
+            <span className="flex items-center gap-2">
+              <Bot size={14} className="text-primary" />
+              AI Executive Insights — Today's Digest
+            </span>
+            {digestOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          {digestOpen && (
+            <div className="p-4 bg-card space-y-3">
+              {digestLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 size={14} className="animate-spin" /> Generating AI summary…
+                </div>
+              ) : digestText ? (
+                <>
+                  <p className="text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{digestText}</p>
+                  <Button size="sm" variant="outline" className="text-xs gap-1" onClick={generateDigest} disabled={digestLoading}>
+                    <RefreshCw size={11} /> Regenerate
+                  </Button>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-2 py-4">
+                  <Bot size={36} className="text-muted-foreground/30" />
+                  <p className="text-sm text-muted-foreground">No digest yet for today</p>
+                  <Button size="sm" onClick={generateDigest} disabled={digestLoading} className="gap-1">
+                    <Bot size={12} /> Generate Now
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <p className="text-[10px] text-muted-foreground">

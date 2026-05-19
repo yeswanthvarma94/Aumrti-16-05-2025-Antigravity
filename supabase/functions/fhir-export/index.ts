@@ -68,9 +68,50 @@ serve(async (req) => {
       });
     }
 
+    // Verify caller identity — reject unauthenticated requests
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: 'Authorization required' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
-    const { data: patient } = await sb.from('patients').select('*').eq('id', patientId).maybeSingle();
+    // Resolve the caller's identity and hospital using their JWT (not service_role)
+    const authClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_ANON_KEY')!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: authError } = await authClient.auth.getUser();
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: 'Invalid authorization' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const { data: callerProfile } = await sb
+      .from('users')
+      .select('hospital_id')
+      .eq('auth_user_id', user.id)
+      .maybeSingle();
+    if (!callerProfile?.hospital_id) {
+      return new Response(JSON.stringify({ error: 'Caller hospital not found' }), {
+        status: 403,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Fetch patient scoped to caller's hospital — prevents cross-hospital access
+    const { data: patient } = await sb
+      .from('patients')
+      .select('*')
+      .eq('id', patientId)
+      .eq('hospital_id', callerProfile.hospital_id)
+      .maybeSingle();
     if (!patient) {
       return new Response(JSON.stringify({ error: 'Patient not found' }), {
         status: 404,
@@ -79,7 +120,7 @@ serve(async (req) => {
     }
 
     const { data: hospital } = await sb.from('hospitals').select('id, name').eq('id', patient.hospital_id).maybeSingle();
-    const { data: encounters } = await sb.from('opd_encounters').select('*').eq('patient_id', patientId).order('created_at', { ascending: false }).limit(10);
+    const { data: encounters } = await sb.from('opd_encounters').select('*').eq('patient_id', patientId).eq('hospital_id', callerProfile.hospital_id).order('created_at', { ascending: false }).limit(10);
 
     const entries: any[] = [];
     entries.push({ resource: patientToFHIR(patient, hospital || { id: 'unknown' }) });

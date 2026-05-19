@@ -7,11 +7,15 @@ ALL_MODULES.forEach(m => {
   ROUTE_ROLES[path] = m.roles;
 });
 
+ROUTE_ROLES['/ipd/day-care'] = ['doctor', 'nurse', 'receptionist', 'billing_executive', 'super_admin', 'hospital_admin'];
+
 // Override / add explicit admin-only routes
 ROUTE_ROLES['/settings'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/accounts'] = ['accountant', 'billing_executive', 'billing_staff', 'cfo', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/hr'] = ['hr_manager', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/billing'] = ['accountant', 'billing_executive', 'billing_staff', 'super_admin', 'hospital_admin'];
+ROUTE_ROLES['/billing/closure'] = ['accountant', 'billing_executive', 'cfo', 'super_admin', 'hospital_admin'];
+ROUTE_ROLES['/insurance'] = ['billing_executive', 'insurance_executive', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/lab'] = ['lab_technician', 'lab_tech', 'doctor', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/radiology'] = ['radiologist', 'doctor', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/admin/go-live'] = ['super_admin', 'hospital_admin'];

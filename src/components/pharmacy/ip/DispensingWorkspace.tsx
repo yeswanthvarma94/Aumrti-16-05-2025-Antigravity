@@ -14,6 +14,8 @@ import FiveRightsPanel from "./FiveRightsPanel";
 import ADRCheckPanel from "./ADRCheckPanel";
 import AllergyBanner from "@/components/clinical/AllergyBanner";
 import { logNABHEvidence } from "@/lib/nabh-evidence";
+import DrugReturnModal from "./DrugReturnModal";
+import NDPSDualSignoffModal from "./NDPSDualSignoffModal";
 import type { PrescriptionItem } from "./PrescriptionQueue";
 
 interface DrugRow {
@@ -72,6 +74,11 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
   const [loading, setLoading] = useState(false);
   const [fiveRightsIdx, setFiveRightsIdx] = useState<number | null>(null);
   const [dispensing, setDispensing] = useState(false);
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [ndpsModalOpen, setNdpsModalOpen] = useState(false);
+  const [ndpsApprovedCountersignerId, setNdpsApprovedCountersignerId] = useState<string | null>(null);
+  const [ndpsPrescriberLicence, setNdpsPrescriberLicence] = useState("");
+  const [currentDispensingId, setCurrentDispensingId] = useState<string | null>(null);
 
   const loadPrescription = useCallback(async () => {
     if (!prescription) {
@@ -237,10 +244,19 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
   };
 
   const allVerified = drugRows.length > 0 && drugRows.every(r => r.five_rights_verified || r.dispense_qty === 0);
-  const ndpsOk = drugRows.filter(r => r.is_ndps && r.dispense_qty > 0).every(r => r.ndps_second_pharmacist_id);
-  const canDispenseAll = allVerified && ndpsOk && !dispensing;
+  const ndpsRows = drugRows.filter(r => r.is_ndps && r.dispense_qty > 0);
+  // Allow clicking Dispense even with NDPS drugs present — modal intercepts for dual sign-off
+  const canDispenseAll = allVerified && !dispensing;
 
-  const handleDispenseAll = async () => {
+  const handleNdpsApproved = (countersignerId: string, prescriberLicence: string) => {
+    setNdpsApprovedCountersignerId(countersignerId);
+    setNdpsPrescriberLicence(prescriberLicence);
+    setNdpsModalOpen(false);
+    // Pass values directly to avoid stale closure on ndpsApprovedCountersignerId
+    handleDispenseAll(countersignerId, prescriberLicence);
+  };
+
+  const handleDispenseAll = async (ndpsCountersignerId?: string, ndpsLicence?: string) => {
     if (!prescription || !patient) return;
     setDispensing(true);
 
@@ -254,7 +270,8 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
         .maybeSingle();
       if (!userData) throw new Error("User not found");
 
-      let dispensingId = prescription.source === "dispensing" ? prescription.id : null;
+      // Reuse cached dispensingId on re-entry after NDPS approval
+      let dispensingId: string | null = currentDispensingId || (prescription.source === "dispensing" ? prescription.id : null);
 
       // Create dispensing record if from prescription source
       if (!dispensingId) {
@@ -275,6 +292,19 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
           .maybeSingle();
         if (dispErr) throw dispErr;
         dispensingId = newDisp.id;
+        setCurrentDispensingId(dispensingId);
+      }
+
+      // Use parameter values (from modal callback) or fall back to state
+      const activeCountersignerId = ndpsCountersignerId ?? ndpsApprovedCountersignerId;
+      const activePrescriberLicence = ndpsLicence ?? ndpsPrescriberLicence;
+
+      // NDPS dual sign-off gate — intercept before any stock/register writes
+      const currentNdpsRows = drugRows.filter(r => r.is_ndps && r.dispense_qty > 0);
+      if (currentNdpsRows.length > 0 && !activeCountersignerId) {
+        setNdpsModalOpen(true);
+        setDispensing(false);
+        return;
       }
 
       let totalAmount = 0;
@@ -332,16 +362,19 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
           await supabase
             .from("ndps_register")
             .insert({
-              hospital_id: hospitalId,
-              drug_id: row.drug_id,
-              drug_name: row.drug_name,
-              drug_schedule: row.drug_schedule || "X",
-              transaction_type: "issue",
-              quantity: row.dispense_qty,
-              balance_after: Math.max(0, Number(balance)),
-              patient_name: patient.full_name,
-              pharmacist_id: userData.id,
-              second_pharmacist_id: row.ndps_second_pharmacist_id || null,
+              hospital_id:         hospitalId,
+              drug_id:             row.drug_id,
+              drug_name:           row.drug_name,
+              drug_schedule:       row.drug_schedule || "X",
+              transaction_type:    "issue",
+              quantity:            row.dispense_qty,
+              balance_after:       Math.max(0, Number(balance)),
+              patient_name:        patient.full_name,
+              pharmacist_id:       userData.id,
+              second_pharmacist_id: activeCountersignerId || null,
+              countersigned_by:    activeCountersignerId || null,
+              countersigned_at:    activeCountersignerId ? new Date().toISOString() : null,
+              prescriber_licence:  activePrescriberLicence || null,
             });
         }
       }
@@ -423,6 +456,10 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
       }
 
       toast({ title: `✓ Dispensed to ${patient.full_name} — ₹${totalAmount.toFixed(0)}` });
+      // Reset NDPS sign-off state for next prescription
+      setNdpsApprovedCountersignerId(null);
+      setNdpsPrescriberLicence("");
+      setCurrentDispensingId(null);
       onDispensed();
     } catch (err: any) {
       toast({ title: "Dispensing failed", description: err.message, variant: "destructive" });
@@ -657,6 +694,35 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
         )}
       </div>
 
+      {/* NDPS Dual Sign-Off Modal */}
+      {ndpsModalOpen && patient && currentDispensingId && (
+        <NDPSDualSignoffModal
+          open={ndpsModalOpen}
+          onClose={() => { setNdpsModalOpen(false); setDispensing(false); }}
+          onApproved={handleNdpsApproved}
+          ndpsRows={ndpsRows
+            .filter(r => r.drug_id)
+            .map(r => ({ drug_id: r.drug_id!, drug_name: r.drug_name, quantity: r.dispense_qty }))}
+          patientName={patient.full_name}
+          prescriberName={prescription.doctor_name || ""}
+          dispensingId={currentDispensingId}
+          hospitalId={hospitalId}
+          prescriptionNumber={prescription.prescription_id || undefined}
+        />
+      )}
+
+      {/* Drug Return Modal */}
+      {showReturnModal && prescription.admission_id && patient && (
+        <DrugReturnModal
+          admissionId={prescription.admission_id}
+          patientId={prescription.patient_id}
+          patientName={patient.full_name}
+          hospitalId={hospitalId}
+          onClose={() => setShowReturnModal(false)}
+          onComplete={() => { setShowReturnModal(false); onDispensed(); }}
+        />
+      )}
+
       {/* 5-Rights Panel */}
       {fiveRightsIdx !== null && patient && drugRows[fiveRightsIdx] && (
         <FiveRightsPanel
@@ -675,6 +741,16 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
           <span className="text-[11px] text-muted-foreground ml-2">{itemCount} items</span>
         </div>
         <div className="flex-1" />
+        {prescription.admission_id && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs h-9 text-amber-700 border-amber-300 hover:bg-amber-50"
+            onClick={() => setShowReturnModal(true)}
+          >
+            <RotateCcw size={13} className="mr-1" /> Return Drugs
+          </Button>
+        )}
         <Button variant="ghost" size="sm" className="text-xs h-9">
           <Save size={14} className="mr-1" /> Save Partial
         </Button>

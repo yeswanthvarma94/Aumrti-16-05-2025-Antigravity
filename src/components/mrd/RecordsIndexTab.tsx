@@ -4,9 +4,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ClipboardList } from "lucide-react";
+import { ClipboardList, FileText } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import CaseBundleModal from "./CaseBundleModal";
 
 const typeColors: Record<string, string> = {
@@ -34,6 +35,9 @@ const RecordsIndexTab: React.FC<Props> = ({ hospitalId }) => {
   const [statusFilter, setStatusFilter] = useState("active");
   const [loading, setLoading] = useState(true);
   const [bundleRecord, setBundleRecord] = useState<any>(null);
+  const [summaryAdmId, setSummaryAdmId] = useState<string | null>(null);
+  const [summaryText, setSummaryText] = useState<string>("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   useEffect(() => { if (hospitalId) fetchRecords(); }, [typeFilter, statusFilter, hospitalId]);
 
@@ -54,6 +58,18 @@ const RecordsIndexTab: React.FC<Props> = ({ hospitalId }) => {
     const s = search.toLowerCase();
     return r.patients?.full_name?.toLowerCase().includes(s) || r.patients?.uhid?.toLowerCase().includes(s);
   });
+
+  const openSummary = async (visitId: string) => {
+    setSummaryAdmId(visitId);
+    setSummaryLoading(true);
+    const { data } = await (supabase as any)
+      .from("admissions")
+      .select("discharge_notes")
+      .eq("id", visitId)
+      .maybeSingle();
+    setSummaryText(data?.discharge_notes || "No discharge summary recorded.");
+    setSummaryLoading(false);
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -110,9 +126,16 @@ const RecordsIndexTab: React.FC<Props> = ({ hospitalId }) => {
                 <TableCell><Badge variant="secondary" className={statusColors[r.status] || ""}>{r.status}</Badge></TableCell>
                 <TableCell>
                   {r.record_type === "ipd" && (
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setBundleRecord(r)}>
-                      <ClipboardList className="h-3 w-3 mr-1" /> Bundle →
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setBundleRecord(r)}>
+                        <ClipboardList className="h-3 w-3 mr-1" /> Bundle →
+                      </Button>
+                      {r.visit_id && (
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => openSummary(r.visit_id)}>
+                          <FileText className="h-3 w-3 mr-1" /> Summary
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </TableCell>
               </TableRow>
@@ -120,6 +143,21 @@ const RecordsIndexTab: React.FC<Props> = ({ hospitalId }) => {
           </TableBody>
         </Table>
       </div>
+
+      {summaryAdmId && (
+        <Dialog open={!!summaryAdmId} onOpenChange={() => setSummaryAdmId(null)}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Discharge Summary</DialogTitle>
+            </DialogHeader>
+            {summaryLoading ? (
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : (
+              <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">{summaryText}</pre>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
 
       {bundleRecord && (
         <CaseBundleModal

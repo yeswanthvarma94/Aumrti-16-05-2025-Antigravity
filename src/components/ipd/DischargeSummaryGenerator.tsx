@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Bot, Loader2, FileText, AlertTriangle, Printer } from "lucide-react";
@@ -23,6 +23,22 @@ const DischargeSummaryGenerator: React.FC<Props> = ({ admissionId, hospitalId, b
   const [generating, setGenerating] = useState(false);
   const [signing, setSigning] = useState(false);
   const [signed, setSigned] = useState(false);
+  const [icdStatus, setIcdStatus] = useState<{
+    status: string;
+    primary_icd_code: string | null;
+    primary_icd_desc: string | null;
+    mrd_locked_at: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    (supabase as any)
+      .from("icd_codings")
+      .select("status, primary_icd_code, primary_icd_desc, mrd_locked_at")
+      .eq("visit_id", admissionId)
+      .eq("visit_type", "ipd")
+      .maybeSingle()
+      .then(({ data }: any) => setIcdStatus(data || null));
+  }, [admissionId]);
 
   const generate = async () => {
     setGenerating(true);
@@ -172,6 +188,7 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
 
     const { error } = await supabase.from("admissions").update({
       discharge_summary_done: true,
+      discharge_notes: summary,
       status: "discharged",
       discharge_type: dischargeType,
       discharged_at: new Date().toISOString(),
@@ -310,6 +327,36 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
         placeholder="Type discharge summary here, or click 'Generate with AI' to auto-fill..."
         className="min-h-[250px] text-sm font-sans leading-relaxed"
       />
+      {/* ICD Coding Status — read-only indicator for discharge workflow */}
+      <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs border ${
+        icdStatus?.status === "mrd_locked"
+          ? "bg-violet-50 border-violet-200 text-violet-700"
+          : icdStatus?.status === "validated"
+            ? "bg-blue-50 border-blue-200 text-blue-700"
+            : icdStatus?.status === "coded"
+              ? "bg-amber-50 border-amber-200 text-amber-700"
+              : "bg-muted border-border text-muted-foreground"
+      }`}>
+        <div className="flex-1 min-w-0">
+          <span className="font-semibold">ICD: </span>
+          {icdStatus?.status === "mrd_locked" && (
+            <>
+              <span>ICD Locked ✓ (MRD) — </span>
+              <span className="font-mono">{icdStatus.primary_icd_code}</span>
+              {icdStatus.primary_icd_desc && <span className="opacity-80"> · {icdStatus.primary_icd_desc}</span>}
+              {icdStatus.mrd_locked_at && (
+                <span className="opacity-60 ml-1">
+                  · {new Date(icdStatus.mrd_locked_at).toLocaleDateString("en-IN")}
+                </span>
+              )}
+            </>
+          )}
+          {icdStatus?.status === "validated" && <span>MRD Validated — awaiting lock</span>}
+          {icdStatus?.status === "coded" && <span>Doctor Suggested — awaiting MRD validation</span>}
+          {(!icdStatus || icdStatus.status === "pending") && <span>ICD Coding Pending</span>}
+        </div>
+      </div>
+
       <div className="flex gap-2">
         <Button variant="outline" onClick={generate} disabled={generating} size="sm">
           {generating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Analysing...</> : <><Bot className="h-4 w-4 mr-1" /> Generate with AI</>}

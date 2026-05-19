@@ -37,6 +37,7 @@ export const ALL_MODULES: ModuleDefinition[] = [
   // ── CLINICAL ──
   { name: "OPD Queue", desc: "Outpatient consultations & tokens", icon: "🏥", route: "/opd", category: "Clinical", roles: ["doctor", "nurse", "receptionist", "super_admin"] },
   { name: "IPD / Wards", desc: "Admitted patients & bed management", icon: "🛏️", route: "/ipd", category: "Clinical", roles: ["doctor", "nurse", "super_admin"] },
+  { name: "Day Care Unit", desc: "Same-day procedures & day care admissions", icon: "🩺", route: "/ipd/day-care", category: "Clinical", roles: ["doctor", "nurse", "receptionist", "super_admin"], isNew: true },
   { name: "Emergency", desc: "Emergency triage & treatment", icon: "🚨", route: "/emergency", category: "Clinical", roles: ["doctor", "nurse", "super_admin"] },
   { name: "Operation Theatre", desc: "OT scheduling & WHO checklist", icon: "🔪", route: "/ot", category: "Clinical", roles: ["doctor", "nurse", "super_admin"] },
   { name: "Nursing", desc: "MAR, handover & care plans", icon: "💉", route: "/nursing", category: "Clinical", roles: ["nurse", "super_admin"] },
@@ -57,7 +58,8 @@ export const ALL_MODULES: ModuleDefinition[] = [
 
   // ── FINANCE ──
   { name: "Billing", desc: "IP/OP billing & payments", icon: "🧾", route: "/billing", category: "Finance", roles: ["billing_executive", "super_admin"] },
-  { name: "Insurance / TPA", desc: "Pre-auth & claims", icon: "🛡️", route: "/insurance", category: "Finance", roles: ["billing_executive", "super_admin"] },
+  { name: "Day Closure", desc: "End-of-day cash reconciliation & lock", icon: "🔒", route: "/billing/closure", category: "Finance", roles: ["accountant", "billing_executive", "cfo", "super_admin"], isNew: true },
+  { name: "Insurance / TPA", desc: "Pre-auth & claims", icon: "🛡️", route: "/insurance", category: "Finance", roles: ["billing_executive", "insurance_executive", "super_admin"] },
   { name: "Payments", desc: "Collections & receipts", icon: "💳", route: "/payments", category: "Finance", roles: ["billing_executive", "super_admin"] },
   { name: "Accounts / ERP", desc: "P&L, balance sheet, journals", icon: "📚", route: "/accounts", category: "Finance", roles: ["accountant", "cfo", "super_admin"] },
   { name: "Asset Management", desc: "Asset register, depreciation & insurance tracking", icon: "🏗️", route: "/assets", category: "Finance", roles: ["accountant", "cfo", "super_admin", "hospital_admin"], isNew: true },

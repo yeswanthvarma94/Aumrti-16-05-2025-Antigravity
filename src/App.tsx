@@ -20,6 +20,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 const QualityPage = lazy(() => import("./pages/quality/QualityPage"));
 const BillingPage = lazy(() => import("./pages/billing/BillingPage"));
+const DailyCashClosurePage = lazy(() => import("./pages/billing/DailyCashClosurePage"));
 const PaymentsPage = lazy(() => import("./pages/billing/PaymentsPage"));
 const PharmacyPage = lazy(() => import("./pages/pharmacy/PharmacyPage"));
 const OPDPage = lazy(() => import("./pages/opd/OPDPage"));
@@ -27,6 +28,7 @@ const OTPage = lazy(() => import("./pages/ot/OTPage"));
 const LabPage = lazy(() => import("./pages/lab/LabPage"));
 const RadiologyPage = lazy(() => import("./pages/radiology/RadiologyPage"));
 const IPDPage = lazy(() => import("./pages/ipd/IPDPage"));
+const DayCarePage = lazy(() => import("./pages/ipd/DayCarePage"));
 const EmergencyPage = lazy(() => import("./pages/emergency/EmergencyPage"));
 const InsurancePage = lazy(() => import("./pages/insurance/InsurancePage"));
 const PatientsPage = lazy(() => import("./pages/patients/PatientsPage"));
@@ -186,6 +188,7 @@ const App = () => (
             <Route path="/opd" element={<RG path="/opd"><SM name="OPD"><OPDPage /></SM></RG>} />
             <Route path="/schedule" element={<RG path="/schedule"><SM name="Scheduling"><SchedulingPage /></SM></RG>} />
             <Route path="/ipd" element={<RG path="/ipd"><SM name="IPD"><IPDPage /></SM></RG>} />
+            <Route path="/ipd/day-care" element={<RG path="/ipd/day-care"><SM name="Day Care Unit"><DayCarePage /></SM></RG>} />
             <Route path="/emergency" element={<RG path="/emergency"><SM name="Emergency"><EmergencyPage /></SM></RG>} />
             <Route path="/ambulance" element={<RG path="/ambulance"><SM name="Ambulance Service"><AmbulancePage /></SM></RG>} />
             <Route path="/home-care" element={<RG path="/home-care"><SM name="Home Care"><HomeCarePage /></SM></RG>} />
@@ -195,6 +198,7 @@ const App = () => (
             <Route path="/radiology" element={<RG path="/radiology"><SM name="Radiology"><RadiologyPage /></SM></RG>} />
             <Route path="/pharmacy" element={<RG path="/pharmacy"><SM name="Pharmacy"><PharmacyPage /></SM></RG>} />
             <Route path="/billing" element={<RG path="/billing"><SM name="Billing"><BillingPage /></SM></RG>} />
+            <Route path="/billing/closure" element={<RG path="/billing/closure"><SM name="Day Closure"><DailyCashClosurePage /></SM></RG>} />
             <Route path="/insurance" element={<RG path="/insurance"><SM name="Insurance"><InsurancePage /></SM></RG>} />
             <Route path="/payments" element={<RG path="/payments"><SM name="Payments"><PaymentsPage /></SM></RG>} />
             <Route path="/hr" element={<RG path="/hr"><SM name="HR & Payroll"><HRPage /></SM></RG>} />

@@ -4,7 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, X, ChevronDown, ChevronUp, Sparkles, RefreshCw, AlertTriangle, ShieldAlert } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronUp, Sparkles, RefreshCw, AlertTriangle, ShieldAlert, RotateCw, Package, CheckCircle2, Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BillRecord } from "@/pages/billing/BillingPage";
 import type { LineItem } from "@/components/billing/BillEditor";
@@ -15,6 +15,11 @@ import { autoPullAdmissionCharges } from "@/lib/ipdBilling";
 import { formatINR, roundCurrency } from "@/lib/currency";
 import { getDefaultGSTRate } from "@/lib/gstRules";
 import { fetchPreAuthCeiling, type PreAuthCeiling } from "@/lib/insuranceCeiling";
+import {
+  fetchPackageContext,
+  checkServiceAgainstPackage,
+  type PackageContext,
+} from "@/lib/packageGuard";
 
 function numberToWords(n: number): string {
   if (n === 0) return "Zero";
@@ -65,10 +70,27 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
     svc: any;
     total: number;
   } | null>(null);
+  const [refreshingCeiling, setRefreshingCeiling] = useState(false);
+
+  // Package inclusion guard
+  const [packageCtx, setPackageCtx] = useState<PackageContext | null>(null);
+
+  const refreshCeiling = async () => {
+    if (!bill.admission_id || !hospitalId) return;
+    setRefreshingCeiling(true);
+    const updated = await fetchPreAuthCeiling(bill.admission_id, hospitalId);
+    setPreAuthCeiling(updated);
+    setRefreshingCeiling(false);
+  };
 
   useEffect(() => {
-    if (!bill.admission_id || !hospitalId || bill.bill_type !== "ipd") return;
-    fetchPreAuthCeiling(bill.admission_id, hospitalId).then(setPreAuthCeiling);
+    if (!bill.admission_id || !hospitalId) return;
+    if (bill.bill_type === "ipd") {
+      fetchPreAuthCeiling(bill.admission_id, hospitalId).then(setPreAuthCeiling);
+    }
+    if (bill.bill_type === "ipd" || bill.bill_type === "daycare") {
+      fetchPackageContext(bill.admission_id).then(setPackageCtx);
+    }
   }, [bill.admission_id, hospitalId, bill.bill_type]);
 
   const handleRecalcIPD = async () => {
@@ -168,6 +190,25 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
 
   const addServiceItem = async (svc: any) => {
     if (!hospitalId) return;
+
+    // ── Package inclusion guard ──────────────────────────────────────────────
+    if (bill.admission_id && packageCtx) {
+      const guard = checkServiceAgainstPackage(packageCtx, svc.id, svc.category || svc.item_type || null);
+      if (guard.status === "included") {
+        toast({
+          title: `Blocked — included in package`,
+          description: `"${svc.name}" is included in the active package "${packageCtx.package.package_name}". It cannot be billed separately.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (guard.status === "extra") {
+        toast({
+          title: `Package extra — billed separately`,
+          description: `"${svc.name}" is a billable extra under "${packageCtx.package.package_name}".${guard.rate != null ? ` Rate: ${formatINR(guard.rate)}.` : ""}`,
+        });
+      }
+    }
 
     // ── Pre-auth ceiling enforcement (IPD insurance bills only) ──────────────
     if (bill.bill_type === "ipd" && bill.admission_id && preAuthCeiling) {
@@ -281,6 +322,25 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
 
   return (
     <div className="flex flex-col h-full">
+      {/* Package active banner — always visible when a package is running */}
+      {packageCtx && (
+        <div className="px-4 py-2 flex items-center gap-2 flex-shrink-0 border-b bg-violet-50 border-violet-200">
+          <Package size={15} className="text-violet-600 shrink-0" />
+          <span className="text-sm font-semibold text-violet-800">
+            PACKAGE ACTIVE — {packageCtx.package.package_name}
+          </span>
+          {packageCtx.package.specialty && (
+            <span className="text-xs text-violet-600">· {packageCtx.package.specialty}</span>
+          )}
+          <span className="text-xs text-violet-500 ml-2">
+            {packageCtx.inclusions.length} included · {packageCtx.extras.length} extras
+          </span>
+          <span className="ml-auto text-xs text-violet-600 font-medium">
+            {formatINR(packageCtx.package.base_price)} package rate
+          </span>
+        </div>
+      )}
+
       {/* Pre-auth ceiling status bar — shown at 80 %+ for IPD insurance bills */}
       {preAuthCeiling && (ceilingWarning || ceilingBreached) && (
         <div
@@ -298,13 +358,22 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
               : `Running bill at ${Math.round(ceilingPct)}% of ${formatINR(preAuthCeiling.ceiling)} pre-auth ceiling`}
           </span>
           {!ceilingBreached && (
-            <span className="ml-auto text-xs opacity-75">
+            <span className="text-xs opacity-75">
               Headroom: {formatINR(roundCurrency(preAuthCeiling.ceiling - ceilingRunningTotal))} — consider filing an enhancement
             </span>
           )}
           {preAuthCeiling.tpaName && (
             <span className="text-xs opacity-60">· {preAuthCeiling.tpaName}</span>
           )}
+          <button
+            onClick={refreshCeiling}
+            disabled={refreshingCeiling}
+            title="Refresh ceiling (after insurance executive approves enhancement)"
+            className="ml-auto flex items-center gap-1 text-xs opacity-60 hover:opacity-100 transition-opacity"
+          >
+            <RotateCw size={12} className={refreshingCeiling ? "animate-spin" : ""} />
+            {ceilingBreached ? "Refresh ceiling" : ""}
+          </button>
         </div>
       )}
 
@@ -411,16 +480,38 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
                 />
                 {searchResults.length > 0 && (
                   <div className="border border-border rounded-lg bg-card shadow-lg max-h-48 overflow-y-auto">
-                    {searchResults.map((svc) => (
-                      <button
-                        key={svc.id}
-                        onClick={() => addServiceItem(svc)}
-                        className="w-full text-left px-3 py-2 hover:bg-muted/50 flex justify-between text-sm border-b border-border last:border-0"
-                      >
-                        <span>{svc.name}</span>
-                        <span className="text-muted-foreground">{formatINR(Number(svc.fee) || 0)}</span>
-                      </button>
-                    ))}
+                    {searchResults.map((svc) => {
+                      const guard = packageCtx
+                        ? checkServiceAgainstPackage(packageCtx, svc.id, svc.category || svc.item_type || null)
+                        : { status: "no_package" as const };
+                      const isIncluded = guard.status === "included";
+                      const isExtra    = guard.status === "extra";
+                      return (
+                        <button
+                          key={svc.id}
+                          onClick={() => addServiceItem(svc)}
+                          className={cn(
+                            "w-full text-left px-3 py-2 flex items-center justify-between text-sm border-b border-border last:border-0",
+                            isIncluded
+                              ? "bg-red-50 hover:bg-red-100 cursor-not-allowed"
+                              : "hover:bg-muted/50"
+                          )}
+                        >
+                          <span className="flex items-center gap-2">
+                            {isIncluded && <Ban size={13} className="text-destructive shrink-0" />}
+                            {isExtra    && <span className="text-[10px] font-bold bg-orange-100 text-orange-700 rounded px-1.5 py-0.5 shrink-0">EXTRA</span>}
+                            {!isIncluded && !isExtra && packageCtx && (
+                              <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />
+                            )}
+                            <span className={isIncluded ? "text-muted-foreground line-through" : ""}>{svc.name}</span>
+                            {isIncluded && (
+                              <span className="text-[10px] text-destructive">Included in package</span>
+                            )}
+                          </span>
+                          <span className="text-muted-foreground shrink-0 ml-2">{formatINR(Number(svc.fee) || 0)}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
                 {searchResults.length === 0 && (
@@ -491,10 +582,13 @@ const LineItemsTab: React.FC<Props> = ({ bill, hospitalId, lineItems, loading, o
           serviceName={enhancementBlocked.svc.name}
           serviceAmount={enhancementBlocked.total}
           onMarkPatientPayable={async () => {
+            const blocked = enhancementBlocked;
             setEnhancementBlocked(null);
-            await insertServiceLine(enhancementBlocked.svc, { isInsuranceCovered: false });
+            await insertServiceLine(blocked.svc, { isInsuranceCovered: false });
+            // Re-fetch ceiling: marking patient-payable may have changed the picture
+            await refreshCeiling();
             toast({
-              title: `${enhancementBlocked.svc.name} marked as patient payable`,
+              title: `${blocked.svc.name} marked as patient payable`,
               description: "This charge is excluded from the TPA claim.",
             });
           }}

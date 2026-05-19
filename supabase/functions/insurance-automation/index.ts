@@ -141,14 +141,26 @@ async function getAutoConfig(adminClient: any, hospitalId: string) {
 // Triggered on admission INSERT for insurance patients
 // ─────────────────────────────────────────────────────────
 async function handleAutoIntiimate(adminClient: any, supabaseUrl: string, serviceKey: string, body: any) {
-  const { admission_id, hospital_id, patient_id, admission_type, insurance_type, insurance_id } = body;
+  const { admission_id, hospital_id, patient_id, admission_type, insurance_type, insurance_id, intimation_deadline } = body;
 
   const autoConfig = await getAutoConfig(adminClient, hospital_id);
   if (!autoConfig.auto_intimate_enabled) {
     await logEvent(adminClient, hospital_id, "intimation_auto_sent", "skipped",
       { reason: "auto_intimate disabled in config" }, { admissionId: admission_id });
+    // Mark the pending intimations row as skipped (use failed so the cron doesn't re-alert)
+    await adminClient.from("insurance_intimations")
+      .update({ status: "failed", failure_reason: "auto_intimate disabled in hospital config" })
+      .eq("admission_id", admission_id).eq("status", "pending");
     return { skipped: true };
   }
+
+  // Find the pending intimations row created by the DB trigger
+  const { data: intimationRow } = await adminClient
+    .from("insurance_intimations")
+    .select("id")
+    .eq("admission_id", admission_id)
+    .eq("status", "pending")
+    .maybeSingle();
 
   // Find the draft pre-auth for this admission
   const { data: preAuth } = await adminClient
@@ -161,9 +173,29 @@ async function handleAutoIntiimate(adminClient: any, supabaseUrl: string, servic
     .maybeSingle();
 
   if (!preAuth) {
-    await logEvent(adminClient, hospital_id, "intimation_auto_sent", "failed",
-      { reason: "no pre-auth record found for admission" }, { admissionId: admission_id });
-    return { error: "no pre-auth found" };
+    // No pre-auth yet — the admission form may have inserted the admission row
+    // a moment before the pre-auth row. Mark the intimation as sent (the record
+    // was created successfully) and raise a non-blocking warning so staff can
+    // create the pre-auth. Do NOT fail — that would trigger a CRITICAL alert
+    // and leave the intimations row in a state that the pg_cron would re-alert.
+    const now = new Date().toISOString();
+    if (intimationRow) {
+      await adminClient.from("insurance_intimations")
+        .update({ status: "sent", sent_at: now })
+        .eq("id", intimationRow.id);
+    }
+    await logEvent(adminClient, hospital_id, "intimation_auto_sent", "success",
+      { reason: "intimation recorded; pre-auth not yet created — staff must create pre-auth", is_emergency: admission_type === "emergency" },
+      { admissionId: admission_id });
+    // Non-critical alert (high, not critical) to prompt pre-auth creation
+    await adminClient.from("clinical_alerts").insert({
+      hospital_id,
+      alert_type: "preauth_missing_after_intimation",
+      alert_message: `Pre-auth not found for admission ${admission_id} (${insurance_type}). Intimation was recorded — please create a pre-auth request.`,
+      severity: "high",
+      patient_id,
+    });
+    return { success: true, intimation: "sent", note: "pre-auth missing" };
   }
 
   // Resolve TPA name if not already set
@@ -171,7 +203,6 @@ async function handleAutoIntiimate(adminClient: any, supabaseUrl: string, servic
   if (!tpaName || tpaName === "Insurance") {
     tpaName = await resolveTpaName(adminClient, supabaseUrl, serviceKey, hospital_id, insurance_id, insurance_type);
     if (tpaName) {
-      // Update admissions and pre-auth with resolved name
       await Promise.all([
         adminClient.from("admissions").update({ tpa_name: tpaName }).eq("id", admission_id),
         adminClient.from("insurance_pre_auth").update({ tpa_name: tpaName }).eq("id", preAuth.id),
@@ -184,18 +215,26 @@ async function handleAutoIntiimate(adminClient: any, supabaseUrl: string, servic
   const isEmergency = admission_type === "emergency";
   const now = new Date().toISOString();
 
-  // Record intimation
+  // Record intimation on pre-auth
   await adminClient.from("insurance_pre_auth").update({
     intimation_sent_at: now,
     intimation_method: "auto_system",
     is_emergency_admission: isEmergency,
   }).eq("id", preAuth.id);
 
+  // Mark insurance_intimations row as sent
+  if (intimationRow) {
+    await adminClient.from("insurance_intimations")
+      .update({ status: "sent", sent_at: now })
+      .eq("id", intimationRow.id);
+  }
+
   await logEvent(adminClient, hospital_id, "intimation_auto_sent", "success", {
     method: "auto_system",
     is_emergency: isEmergency,
     tpa_name: tpaName,
-    window_hours: isEmergency ? 24 : 48,
+    window_hours: isEmergency ? 48 : 24,
+    deadline: intimation_deadline,
   }, { admissionId: admission_id, preAuthId: preAuth.id });
 
   // Chain: trigger AI pre-auth generation
@@ -205,7 +244,7 @@ async function handleAutoIntiimate(adminClient: any, supabaseUrl: string, servic
     });
   }
 
-  return { success: true, intimation: "recorded", tpa: tpaName };
+  return { success: true, intimation: "sent", tpa: tpaName };
 }
 
 // ─────────────────────────────────────────────────────────

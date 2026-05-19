@@ -14,6 +14,16 @@ interface PostingData {
 
 export const autoPostJournalEntry = async (data: PostingData) => {
   try {
+    // Guard: if the source is a bill already posted by the DB trigger (trg_auto_post_bill_journal),
+    // skip to prevent a duplicate journal entry. Returns null — callers already have the bill committed.
+    // Non-bill sources (payroll, assets, GRN) return null from maybeSingle and bypass this guard.
+    const { data: billRow } = await (supabase as any)
+      .from("bills")
+      .select("posted_to_journal")
+      .eq("id", data.sourceId)
+      .maybeSingle();
+    if (billRow?.posted_to_journal) return null;
+
     // 1. Find matching rule
     const { data: rule } = await (supabase as any)
       .from("auto_posting_rules")
@@ -80,6 +90,12 @@ export const autoPostJournalEntry = async (data: PostingData) => {
         cost_centre_id: data.costCentreId || null,
       },
     ]);
+
+    // 5. Mark the source bill as journal-posted.
+    // No-op if sourceId is not a bills row (e.g. asset, GRN, payroll).
+    await (supabase as any).from("bills")
+      .update({ posted_to_journal: true })
+      .eq("id", data.sourceId);
 
     return entry;
   } catch (err) {
