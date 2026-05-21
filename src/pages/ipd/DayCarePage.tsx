@@ -27,6 +27,13 @@ interface DischargeTarget {
   procedureName: string;
 }
 
+const todayStr = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+const yesterdayStr = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+};
+
 const DayCarePage: React.FC = () => {
   const [hospitalId, setHospitalId] = useState<string | null>(null);
   const [admissions, setAdmissions] = useState<DayCareAdmission[]>([]);
@@ -35,7 +42,8 @@ const DayCarePage: React.FC = () => {
   const [admitOpen, setAdmitOpen] = useState(false);
   const [dischargeTarget, setDischargeTarget] = useState<DischargeTarget | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [view, setView] = useState<"active" | "today_discharged">("active");
+  const [view, setView] = useState<"active" | "discharged">("active");
+  const [selectedDate, setSelectedDate] = useState<string>(todayStr());
 
   const fetchData = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -44,10 +52,9 @@ const DayCarePage: React.FC = () => {
     if (!ud?.hospital_id) { setLoading(false); return; }
     setHospitalId(ud.hospital_id);
 
-    const todayIST = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
     const status = view === "active" ? "active" : "discharged";
 
-    let q = (supabase as any)
+    const { data, error } = await (supabase as any)
       .from("admissions")
       .select(`
         id, admission_number, admitted_at, admitting_diagnosis, insurance_type, status,
@@ -58,13 +65,10 @@ const DayCarePage: React.FC = () => {
       .eq("hospital_id", ud.hospital_id)
       .eq("admission_type", "daycare")
       .eq("status", status)
+      .gte("admitted_at", `${selectedDate}T00:00:00+05:30`)
+      .lte("admitted_at", `${selectedDate}T23:59:59+05:30`)
       .order("admitted_at", { ascending: false });
 
-    if (view === "today_discharged") {
-      q = q.gte("discharged_at", `${todayIST}T00:00:00+05:30`).lte("discharged_at", `${todayIST}T23:59:59+05:30`);
-    }
-
-    const { data, error } = await q;
     if (error) { console.error("Day care fetch:", error.message); setLoading(false); return; }
 
     const rows: DayCareAdmission[] = (data || []).map((a: any) => ({
@@ -81,7 +85,7 @@ const DayCarePage: React.FC = () => {
 
     setAdmissions(rows);
     setLoading(false);
-  }, [view]);
+  }, [view, selectedDate]);
 
   useEffect(() => {
     setLoading(true);
@@ -123,10 +127,37 @@ const DayCarePage: React.FC = () => {
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel — patient list */}
         <div className="w-80 flex flex-col border-r bg-white shrink-0">
-          {/* Tabs + search */}
-          <div className="p-3 border-b space-y-2">
+          {/* Date bar */}
+          <div className="px-3 pt-3 pb-2 border-b space-y-2">
+            <div className="flex items-center gap-1.5">
+              {[
+                { label: "Today", val: todayStr() },
+                { label: "Yesterday", val: yesterdayStr() },
+              ].map(d => (
+                <button
+                  key={d.val}
+                  onClick={() => { setSelectedDate(d.val); setSelectedId(null); }}
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+                    selectedDate === d.val
+                      ? "bg-teal-600 text-white"
+                      : "bg-muted text-muted-foreground hover:bg-muted/70"
+                  )}
+                >
+                  {d.label}
+                </button>
+              ))}
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={e => { setSelectedDate(e.target.value); setSelectedId(null); }}
+                className="ml-auto text-[11px] bg-card border border-border rounded px-1.5 py-1 text-foreground"
+              />
+            </div>
+
+            {/* Status tabs */}
             <div className="flex gap-1">
-              {(["active", "today_discharged"] as const).map(v => (
+              {(["active", "discharged"] as const).map(v => (
                 <button
                   key={v}
                   onClick={() => { setView(v); setSelectedId(null); }}
@@ -135,10 +166,12 @@ const DayCarePage: React.FC = () => {
                     view === v ? "bg-teal-600 text-white" : "bg-muted text-muted-foreground hover:bg-muted/70"
                   )}
                 >
-                  {v === "active" ? "Active" : "Discharged Today"}
+                  {v === "active" ? "Active" : "Discharged"}
                 </button>
               ))}
             </div>
+
+            {/* Search */}
             <div className="relative">
               <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -155,7 +188,7 @@ const DayCarePage: React.FC = () => {
             {loading && <p className="text-xs text-muted-foreground text-center p-4">Loading…</p>}
             {!loading && filtered.length === 0 && (
               <p className="text-xs text-muted-foreground text-center p-6">
-                {view === "active" ? "No active day care patients." : "No discharges today."}
+                {view === "active" ? "No active day care patients." : "No discharges on this date."}
               </p>
             )}
             {filtered.map(a => (

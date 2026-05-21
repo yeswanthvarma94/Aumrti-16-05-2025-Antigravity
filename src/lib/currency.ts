@@ -23,3 +23,6 @@ export function calcLineTotal(taxable: number, gstPercent: number): { gst: numbe
   const gst = calcGST(taxable, gstPercent);
   return { gst, total: roundCurrency(taxable + gst) };
 }
+
+/** Alias for formatINR — formats amount in Indian Rupee notation */
+export const formatCurrency = formatINR;

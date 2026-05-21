@@ -256,17 +256,12 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
 
   const isIRNLocked = !!bill?.irn;
 
-  const handleGenerateGST = async () => {
-    if (!bill) return;
-    const simulatedIRN = `DEMO-${Date.now()}-${bill.bill_number}`;
-    await supabase.from("bills").update({
-      irn: simulatedIRN,
-      irn_generated_at: new Date().toISOString(),
-      bill_status: "irn_locked",
-    }).eq("id", bill.id);
-    toast({ title: "Demo GST Invoice generated — bill is now locked", description: "Connect NIC IRP for live e-invoicing" });
-    onRefresh();
-    setShowGstInvoice(true);
+  const handleGenerateGST = () => {
+    toast({
+      title: "Live e-Invoice not configured",
+      description: "NIC IRP API integration is required for GST e-Invoice generation. Contact your implementation partner to enable this feature.",
+      variant: "destructive",
+    });
   };
 
   const recalcBillTotals = async () => {

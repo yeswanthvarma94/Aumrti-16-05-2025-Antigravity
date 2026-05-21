@@ -108,6 +108,7 @@ const AyushPage = lazy(() => import("./pages/ayush/AyushPage"));
 const PackagesPage = lazy(() => import("./pages/packages/PackagesPage"));
 const IVFPage = lazy(() => import("./pages/ivf/IVFPage"));
 const SettingsRadiologyPage = lazy(() => import("./pages/settings/SettingsRadiologyPage"));
+const SettingsDayCareProceduresPage = lazy(() => import("./pages/settings/SettingsDayCareProceduresPage"));
 const SchedulingPage = lazy(() => import("./pages/schedule/SchedulingPage"));
 const AmbulancePage = lazy(() => import("./pages/ambulance/AmbulancePage"));
 const HomeCarePage = lazy(() => import("./pages/home-care/HomeCarePage"));
@@ -174,7 +175,6 @@ const App = () => (
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<SuspenseWrap><Register /></SuspenseWrap>} />
           <Route path="/setup/onboarding" element={<AuthGuard><SuspenseWrap><OnboardingWizard /></SuspenseWrap></AuthGuard>} />
-          <Route path="/design-system" element={<SuspenseWrap><DesignSystem /></SuspenseWrap>} />
           <Route path="/tv-display" element={<SuspenseWrap><TVDisplayPage /></SuspenseWrap>} />
           <Route path="/ward-board" element={<SuspenseWrap><WardNursingBoard /></SuspenseWrap>} />
           <Route path="/hod-dashboard" element={<AuthGuard><SuspenseWrap><HODDashboardPage /></SuspenseWrap></AuthGuard>} />
@@ -242,6 +242,7 @@ const App = () => (
             <Route path="/settings/api-hub" element={<RG path="/settings"><SM name="API Hub"><APIConfigHubPage /></SM></RG>} />
             <Route path="/settings/icd-codes" element={<RG path="/settings"><SM name="ICD Codes"><SettingsICDCodesPage /></SM></RG>} />
             <Route path="/settings/radiology" element={<RG path="/settings"><SM name="Radiology Settings"><SettingsRadiologyPage /></SM></RG>} />
+            <Route path="/settings/day-care-procedures" element={<RG path="/settings"><SM name="Day Care Procedures"><SettingsDayCareProceduresPage /></SM></RG>} />
             <Route path="/settings/templates" element={<RG path="/settings"><SM name="EMR Templates"><SpecialtyTemplateBuilderPage /></SM></RG>} />
             <Route path="/accounts" element={<RG path="/accounts"><SM name="Accounts"><AccountsPage /></SM></RG>} />
             <Route path="/accounts/setup" element={<RG path="/accounts"><SM name="Opening Balances"><OpeningBalancesPage /></SM></RG>} />
@@ -277,6 +278,7 @@ const App = () => (
             <Route path="/inventory/procurement-recommendations" element={<RG path="/inventory"><SM name="Procurement Recommendations"><ProcurementRecommendationsPage /></SM></RG>} />
             <Route path="/admin/go-live" element={<RG path="/admin/go-live"><SM name="Go-Live Checklist"><GoLiveChecklistPage /></SM></RG>} />
             <Route path="/admin/data-migration" element={<RG path="/admin/data-migration"><SM name="Data Migration"><DataMigrationPage /></SM></RG>} />
+            <Route path="/design-system" element={<RG path="/design-system"><SM name="Design System"><DesignSystem /></SM></RG>} />
           </Route>
 
           <Route path="*" element={<NotFound />} />

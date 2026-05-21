@@ -9,9 +9,10 @@ interface Props {
   onSave?: () => void;
   saving?: boolean;
   hideSave?: boolean;
+  wide?: boolean;
 }
 
-const SettingsPageWrapper: React.FC<Props> = ({ title, children, onSave, saving, hideSave }) => {
+const SettingsPageWrapper: React.FC<Props> = ({ title, children, onSave, saving, hideSave, wide }) => {
   const navigate = useNavigate();
   return (
     <div className="h-[calc(100vh-56px)] flex flex-col overflow-hidden bg-background">
@@ -32,7 +33,7 @@ const SettingsPageWrapper: React.FC<Props> = ({ title, children, onSave, saving,
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[720px] mx-auto py-8 px-4">{children}</div>
+        <div className={wide ? "w-full py-6 px-8" : "max-w-[720px] mx-auto py-8 px-4"}>{children}</div>
       </div>
     </div>
   );

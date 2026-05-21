@@ -99,7 +99,24 @@ const RetailDrugSearch: React.FC<Props> = ({ hospitalId, onAddToCart }) => {
         total_stock: totalStock,
       });
     }
-    setResults(mapped);
+    // Merge duplicate drug_master entries with same name
+    const mergedMap = new Map<string, DrugSearchResult>();
+    for (const item of mapped) {
+      const key = item.drug_name.toLowerCase();
+      if (mergedMap.has(key)) {
+        const existing = mergedMap.get(key)!;
+        existing.total_stock += item.total_stock;
+        // Keep the best batch with earliest expiry
+        if (item.best_batch && (!existing.best_batch ||
+          new Date(item.best_batch.expiry_date) < new Date(existing.best_batch.expiry_date))) {
+          existing.best_batch = item.best_batch;
+        }
+      } else {
+        mergedMap.set(key, { ...item });
+      }
+    }
+
+    setResults(Array.from(mergedMap.values()));
     setLoading(false);
   }, [hospitalId]);
 

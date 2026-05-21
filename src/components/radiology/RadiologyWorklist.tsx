@@ -1,8 +1,15 @@
-import React from "react";
+import React, { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Plus, Clock } from "lucide-react";
+import { Plus, Clock, ChevronDown, ChevronUp, ScanLine } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
 import type { RadiologyOrder, Modality } from "@/pages/radiology/RadiologyPage";
+
+interface PendingOpdRadOrder {
+  prescriptionId: string;
+  encounterId: string;
+  patient: { id: string; full_name: string; uhid: string; gender: string | null; dob: string | null };
+  studies: { study_name: string }[];
+}
 
 interface Props {
   orders: RadiologyOrder[];
@@ -15,6 +22,8 @@ interface Props {
   onDateChange: (d: string) => void;
   statCounts: { pending: number; imaging: number; reporting: number; done: number };
   onNewOrder: () => void;
+  pendingOpdOrders?: PendingOpdRadOrder[];
+  onCreateFromOpd?: (patient: PendingOpdRadOrder["patient"], studyNames: string[], encounterId: string) => void;
 }
 
 const MODALITY_ICONS: Record<string, string> = {
@@ -66,13 +75,27 @@ function timeAgo(t: string): string {
   return `${hrs}h ${mins % 60}m`;
 }
 
+const STATUS_FILTER_OPTIONS = [
+  { value: "all", label: "All Statuses" },
+  { value: "ordered", label: "Ordered" },
+  { value: "scheduled", label: "Scheduled" },
+  { value: "patient_arrived", label: "Arrived" },
+  { value: "in_progress", label: "Imaging" },
+  { value: "images_acquired", label: "Awaiting Report" },
+  { value: "reported", label: "Reported" },
+  { value: "validated", label: "Validated" },
+];
+
 const RadiologyWorklist: React.FC<Props> = ({
   orders, modalities, selectedOrderId, onSelectOrder,
   filterModality, onFilterChange, selectedDate, onDateChange,
-  statCounts, onNewOrder,
+  statCounts, onNewOrder, pendingOpdOrders = [], onCreateFromOpd,
 }) => {
+  const [opdExpanded, setOpdExpanded] = useState(true);
+  const [filterStatus, setFilterStatus] = useState("all");
   const today = new Date().toISOString().split("T")[0];
   const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+  const visibleOrders = filterStatus === "all" ? orders : orders.filter(o => o.status === filterStatus);
 
   return (
     <div className="w-[320px] shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
@@ -88,22 +111,26 @@ const RadiologyWorklist: React.FC<Props> = ({
           </button>
         </div>
 
-        {/* Modality filter tabs */}
-        <div className="flex gap-1 mt-2 overflow-x-auto pb-1 scrollbar-none">
-          {MODALITY_TABS.map(t => (
-            <button
-              key={t.key}
-              onClick={() => onFilterChange(t.key)}
-              className={cn(
-                "shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
-                filterModality === t.key
-                  ? "bg-[hsl(220,55%,23%)] text-white"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80"
-              )}
-            >
-              {t.icon} {t.label}
-            </button>
-          ))}
+        {/* Filters row: modality + status */}
+        <div className="mt-2 flex gap-1.5">
+          <select
+            value={filterModality}
+            onChange={e => onFilterChange(e.target.value)}
+            className="flex-1 text-[12px] bg-muted border border-border rounded-md px-2 py-1.5 text-foreground font-medium focus:outline-none focus:ring-1 focus:ring-[hsl(220,55%,23%)] cursor-pointer"
+          >
+            {MODALITY_TABS.map(t => (
+              <option key={t.key} value={t.key}>{t.icon} {t.label}</option>
+            ))}
+          </select>
+          <select
+            value={filterStatus}
+            onChange={e => setFilterStatus(e.target.value)}
+            className="flex-1 text-[12px] bg-muted border border-border rounded-md px-2 py-1.5 text-foreground font-medium focus:outline-none focus:ring-1 focus:ring-[hsl(220,55%,23%)] cursor-pointer"
+          >
+            {STATUS_FILTER_OPTIONS.map(s => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -142,16 +169,58 @@ const RadiologyWorklist: React.FC<Props> = ({
         <span className="text-emerald-600">✓ {statCounts.done}</span>
       </div>
 
+      {/* Pending from OPD */}
+      {pendingOpdOrders.length > 0 && (
+        <div className="shrink-0 border-b border-amber-200 bg-amber-50/60">
+          <button
+            onClick={() => setOpdExpanded((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2 text-left"
+          >
+            <div className="flex items-center gap-1.5">
+              <ScanLine size={13} className="text-amber-600" />
+              <span className="text-[11px] font-bold text-amber-700">Pending from OPD</span>
+              <span className="text-[10px] bg-amber-500 text-white rounded-full px-1.5 py-0.5 font-bold">
+                {pendingOpdOrders.length}
+              </span>
+            </div>
+            {opdExpanded ? <ChevronUp size={13} className="text-amber-600" /> : <ChevronDown size={13} className="text-amber-600" />}
+          </button>
+          {opdExpanded && (
+            <div className="px-2 pb-2 space-y-1.5">
+              {pendingOpdOrders.map((item) => (
+                <div key={item.prescriptionId} className="bg-white rounded-lg border border-amber-200 p-2">
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-semibold text-foreground truncate">{item.patient.full_name}</p>
+                      <p className="text-[10px] text-muted-foreground">{item.patient.uhid}</p>
+                      <p className="text-[10px] text-amber-700 mt-0.5 truncate">
+                        {item.studies.map((s) => s.study_name).join(", ")}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => onCreateFromOpd?.(item.patient, item.studies.map((s) => s.study_name), item.encounterId)}
+                      className="shrink-0 text-[10px] bg-amber-500 text-white px-2 py-1 rounded font-semibold hover:bg-amber-600 transition-colors"
+                    >
+                      Create & Bill
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Order list */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1.5">
-        {orders.length === 0 && (
+        {visibleOrders.length === 0 && (
           <EmptyState
             icon="🩻"
             title="No studies in worklist"
             description="Radiology orders will appear here when created"
           />
         )}
-        {orders.map(o => {
+        {visibleOrders.map(o => {
           const sel = o.id === selectedOrderId;
           const statusInfo = STATUS_LABEL[o.status] || STATUS_LABEL.ordered;
           const modIcon = MODALITY_ICONS[o.modality_type] || "📋";

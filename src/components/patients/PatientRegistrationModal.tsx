@@ -157,13 +157,14 @@ const PatientRegistrationModal: React.FC<Props> = ({ onClose, onSuccess, editPat
       return;
     }
 
-    // INSERT new patient
+    // INSERT new patient — atomic UHID via next_seq RPC (prevents race conditions)
+    const { data: seqVal, error: seqErr } = await supabase.rpc("next_seq", {
+      p_hospital_id: hospitalId,
+      p_type: "uhid",
+    });
+    if (seqErr || seqVal == null) throw new Error("Failed to generate UHID sequence");
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const { count } = await supabase
-      .from("patients")
-      .select("*", { count: "exact", head: true })
-      .eq("hospital_id", hospitalId);
-    const seq = String((count ?? 0) + 1).padStart(4, "0");
+    const seq = String(seqVal).padStart(4, "0");
     const uhid = `UHID-${dateStr}-${seq}`;
 
     const { error } = await supabase.from("patients").insert({

@@ -27,16 +27,7 @@ export async function autoPullAdmissionCharges(
   const nursingProcedureIdsToMark: string[] = [];
   let usedFallbackRate = false;
 
-  // ----- Existing items for dedupe -----
-  const { data: existingLineItems } = await (supabase as any)
-    .from("bill_line_items")
-    .select("id, description, item_type, source_module, source_record_id, source_dedupe_key");
-
-  const existingForBill = (existingLineItems || []).filter(
-    (it: any) => it.bill_id === billId || true // fallback safety; we filter again below
-  );
-
-  // Re-fetch scoped to this bill (the above select didn't filter — fix it)
+  // ----- Existing items for dedupe (scoped to this bill only) -----
   const { data: scopedExisting } = await (supabase as any)
     .from("bill_line_items")
     .select("id, description, item_type, source_module, source_record_id, source_dedupe_key")

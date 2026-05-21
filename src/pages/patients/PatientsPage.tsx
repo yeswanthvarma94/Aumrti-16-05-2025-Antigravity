@@ -255,6 +255,7 @@ const PatientsPage: React.FC = () => {
       {timelinePatient && (
         <PatientTimelineDrawer
           patient={timelinePatient}
+          hospitalId={hospitalId!}
           onClose={() => setTimelinePatient(null)}
         />
       )}

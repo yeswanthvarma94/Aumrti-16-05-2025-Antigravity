@@ -100,6 +100,13 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
   // Success step
   const [createdBillNumber, setCreatedBillNumber] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [hospitalInfo, setHospitalInfo] = useState<{ name: string; logo_url: string | null; address: string | null; phone: string | null; gstin: string | null } | null>(null);
+
+  useEffect(() => {
+    supabase.from("hospitals").select("name, logo_url, address, phone, gstin")
+      .eq("id", hospitalId).maybeSingle()
+      .then(({ data }) => setHospitalInfo(data));
+  }, [hospitalId]);
 
   const preselectedNamesRef = useRef<string[]>(preselectedStudyNames);
   const preselectionDone = useRef(false);
@@ -279,7 +286,7 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
       if (!user) throw new Error("Not authenticated");
 
       // 1. Create orders
-      await batchCreateRadiologyOrders(currentUserId);
+      await batchCreateRadiologyOrders(currentUserId, "advance_covered");
 
       // 2. Create bill for IPD charge-to-advance
       const rates: StudyRate[] = selectedStudies.map(s => ({ name: s.name, modalityType: s.modalityType, rate: s.fee, total: s.fee }));
@@ -337,12 +344,13 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
 
       toast({ title: `✓ ${selectedStudies.length} radiology order(s) created — Bill generated & charged to IPD` });
       onCreated();
+      onClose();
     } catch (err: any) {
       toast({ title: "Failed to create orders", description: err.message, variant: "destructive" });
     } finally { setSubmitting(false); }
   };
 
-  const batchCreateRadiologyOrders = async (userId: string) => {
+  const batchCreateRadiologyOrders = async (userId: string, paymentStatus: "paid" | "advance_covered") => {
     if (!selectedPatient) return;
     const today = new Date().toISOString().split("T")[0];
     const todayCompact = today.replace(/-/g, "");
@@ -350,10 +358,13 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
     for (let i = 0; i < selectedStudies.length; i++) {
       const study = selectedStudies[i];
 
-      // Find modality ID from groups
-      const group = modalityGroups.find(g => g.modality_type === study.modalityType);
+      // Find modality ID — prefer UUID match via studyMasterId (works even when modality_type is null)
+      const group = study.studyMasterId
+        ? modalityGroups.find(g => g.studies.some(s => s.id === study.studyMasterId))
+        : modalityGroups.find(g => g.modality_type === study.modalityType);
       let modalityId = group?.id;
 
+      // Fallback: create modality on-the-fly for custom studies that have no group match
       if (!modalityId && study.modalityType) {
         const { data: newMod } = await supabase
           .from("radiology_modalities")
@@ -361,7 +372,10 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
           .select("id").maybeSingle();
         if (newMod) modalityId = newMod.id;
       }
-      if (!modalityId) continue;
+      if (!modalityId) {
+        toast({ title: "Study skipped", description: `Could not determine modality for "${study.name}". Please contact support.`, variant: "destructive" });
+        continue;
+      }
 
       const { data: seqVal } = await (supabase.rpc as any)("next_seq", { p_hospital_id: hospitalId, p_type: "accession" });
       const seq = String(seqVal ?? 1).padStart(4, "0");
@@ -378,16 +392,20 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
           clinical_history: clinicalHistory || null,
           ordered_by: userId,
           priority,
+          status: "ordered",
           accession_number: `RAD-${todayCompact}-${seq}`,
           is_pcpndt: isObstetricUsg,
           billing_status: "billed",
           ordered_at: new Date().toISOString(),
+          order_date: today,
+          order_time: new Date().toISOString(),
+          payment_status: paymentStatus,
           ...(linkedEncounter ? { encounter_id: linkedEncounter } : {}),
           ...(linkedAdmission ? { admission_id: linkedAdmission } : {}),
         } as any)
         .select("id").maybeSingle();
 
-      if (orderError || !orderData) continue;
+      if (orderError || !orderData) throw orderError || new Error(`Failed to create order for "${study.name}"`);
 
       await supabase.from("radiology_reports").insert({ hospital_id: hospitalId, order_id: orderData.id, patient_id: selectedPatient.id });
 
@@ -410,7 +428,10 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
   };
 
   const handleCollectAndCreate = async () => {
-    if (!currentUserId || !selectedPatient) return;
+    if (!currentUserId || !selectedPatient) {
+      toast({ title: "Session error", description: "Please refresh the page and try again.", variant: "destructive" });
+      return;
+    }
     setSubmitting(true);
     try {
       const grandTotal = studyRates.reduce((s, r) => s + r.total, 0);
@@ -458,7 +479,7 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
         });
       } catch { /* non-blocking */ }
 
-      await batchCreateRadiologyOrders(currentUserId);
+      await batchCreateRadiologyOrders(currentUserId, "paid");
 
       setCreatedBillNumber(billNumber);
       setStep("success");
@@ -730,20 +751,66 @@ const NewRadiologyOrderModal: React.FC<Props> = ({
             <div className="bg-muted/40 rounded-xl p-4 text-left space-y-2 border border-border">
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Bill No.</span><span className="font-bold text-primary">{createdBillNumber}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Patient</span><span className="font-medium">{selectedPatient?.full_name}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">UHID</span><span className="font-medium font-mono text-xs">{selectedPatient?.uhid}</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Studies</span><span className="font-medium">{selectedStudies.length} study/studies</span></div>
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Payment</span><span className="font-medium capitalize">{paymentMode}</span></div>
               <div className="flex justify-between text-base font-bold pt-2 border-t border-border"><span>Amount Paid</span><span className="text-emerald-600">₹{grandTotal.toLocaleString("en-IN")}</span></div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => printDocument(
-                `Radiology Receipt — ${createdBillNumber}`,
-                `<div class="header"><h1>Radiology Order Receipt</h1></div>
-                 <div class="row"><span class="label">Bill No.</span><span>${createdBillNumber}</span></div>
-                 <div class="row"><span class="label">Patient</span><span>${selectedPatient?.full_name || "—"}</span></div>
-                 <div class="row"><span class="label">Studies</span><span>${selectedStudies.length} study/studies</span></div>
-                 <div class="row"><span class="label">Payment Mode</span><span style="text-transform:capitalize">${paymentMode}</span></div>
-                 <div class="total-row"><span>Amount Paid</span><span class="amount">₹${grandTotal.toLocaleString("en-IN")}</span></div>`
-              )}><Printer className="h-4 w-4 mr-1" /> Print Receipt</Button>
+              <Button variant="outline" className="flex-1" onClick={() => {
+                const now = new Date();
+                const dateStr = now.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+                const timeStr = now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+                const patientAge = selectedPatient?.dob
+                  ? Math.floor((Date.now() - new Date(selectedPatient.dob).getTime()) / (365.25 * 86400000))
+                  : null;
+                const hosp = hospitalInfo;
+
+                const header = `
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:14px;border-bottom:2px solid #1A2F5A;margin-bottom:18px;">
+                    <div>
+                      ${hosp?.logo_url ? `<img src="${hosp.logo_url}" style="max-height:56px;max-width:180px;object-fit:contain;margin-bottom:6px;display:block;" />` : ""}
+                      <div style="font-size:18px;font-weight:700;color:#1A2F5A;">${hosp?.name || "Hospital"}</div>
+                      ${hosp?.address ? `<div style="font-size:11px;color:#64748b;margin-top:3px;">${hosp.address}</div>` : ""}
+                      ${hosp?.phone ? `<div style="font-size:11px;color:#64748b;margin-top:2px;">Ph: ${hosp.phone}</div>` : ""}
+                      ${hosp?.gstin ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">GSTIN: ${hosp.gstin}</div>` : ""}
+                    </div>
+                    <div style="text-align:right;font-size:11px;color:#64748b;">
+                      <div>${dateStr}</div><div>${timeStr}</div>
+                    </div>
+                  </div>
+                  <div style="background:#f8fafc;border-radius:6px;padding:10px 16px;margin-bottom:16px;text-align:center;">
+                    <div style="font-size:15px;font-weight:700;color:#1A2F5A;letter-spacing:0.5px;">RADIOLOGY ORDER RECEIPT</div>
+                    <div style="font-size:13px;color:#475569;margin-top:3px;">${createdBillNumber}</div>
+                  </div>`;
+
+                const patientSection = `
+                  <div class="section-title">Patient Information</div>
+                  <div class="row"><span class="label">Patient Name</span><span>${selectedPatient?.full_name || "—"}</span></div>
+                  <div class="row"><span class="label">UHID</span><span style="font-family:monospace">${selectedPatient?.uhid || "—"}</span></div>
+                  ${patientAge !== null ? `<div class="row"><span class="label">Age / Gender</span><span>${patientAge}Y${selectedPatient?.gender ? ` / ${selectedPatient.gender}` : ""}</span></div>` : ""}`;
+
+                const studiesRows = studyRates.map(r =>
+                  `<tr><td>${r.name}</td><td>${r.modalityType}</td><td style="text-align:right">₹${Number(r.rate).toLocaleString("en-IN")}</td></tr>`
+                ).join("");
+                const studiesSection = `
+                  <div class="section-title" style="margin-top:16px;">Studies Ordered</div>
+                  <table>
+                    <thead><tr><th>Study Name</th><th>Modality</th><th style="text-align:right">Rate (₹)</th></tr></thead>
+                    <tbody>${studiesRows}</tbody>
+                  </table>`;
+
+                const paymentSection = `
+                  <div class="section-title" style="margin-top:16px;">Payment Details</div>
+                  <div class="row"><span class="label">Payment Mode</span><span style="text-transform:capitalize">${paymentMode}</span></div>
+                  ${paymentRef ? `<div class="row"><span class="label">Reference No.</span><span style="font-family:monospace">${paymentRef}</span></div>` : ""}
+                  <div class="total-row"><span>Amount Paid</span><span class="amount">₹${grandTotal.toLocaleString("en-IN")}</span></div>`;
+
+                printDocument(
+                  `Radiology Receipt — ${createdBillNumber}`,
+                  header + patientSection + studiesSection + paymentSection
+                );
+              }}><Printer className="h-4 w-4 mr-1" /> Print Receipt</Button>
               <Button className="flex-1" onClick={onClose}>Done</Button>
             </div>
           </div>

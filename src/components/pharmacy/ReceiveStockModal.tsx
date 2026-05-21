@@ -54,16 +54,49 @@ const ReceiveStockModal: React.FC<Props> = ({ hospitalId, onClose, onSaved }) =>
     setExtractionConfidence(data.confidence);
 
     const mapped = await Promise.all((data.items || []).map(async (item) => {
+      // Step 1: exact case-insensitive match on full name
+      const { data: exact } = await supabase
+        .from("drug_master").select("id, drug_name")
+        .eq("hospital_id", hospitalId)
+        .ilike("drug_name", item.name)
+        .eq("is_active", true).limit(1);
+
+      if (exact?.length === 1) {
+        return {
+          drugId: exact[0].id, drugName: exact[0].drug_name,
+          extractedName: item.name, matchStatus: "matched",
+          batchNumber: item.batch_number || "", expiryDate: item.expiry_date || "",
+          quantity: item.quantity || 0, costPrice: item.unit_rate || 0,
+          mrp: item.mrp || 0, gstPercent: item.gst_percent || 12,
+        };
+      }
+
+      // Step 2: partial match on full name (unique result only)
+      const { data: partial } = await supabase
+        .from("drug_master").select("id, drug_name")
+        .eq("hospital_id", hospitalId)
+        .ilike("drug_name", `%${item.name}%`)
+        .eq("is_active", true).limit(3);
+
+      if (partial?.length === 1) {
+        return {
+          drugId: partial[0].id, drugName: partial[0].drug_name,
+          extractedName: item.name, matchStatus: "matched",
+          batchNumber: item.batch_number || "", expiryDate: item.expiry_date || "",
+          quantity: item.quantity || 0, costPrice: item.unit_rate || 0,
+          mrp: item.mrp || 0, gstPercent: item.gst_percent || 12,
+        };
+      }
+
+      // Step 3: partial match on first word only (existing fallback)
       const searchWord = item.name.split(' ')[0];
-      const { data: matches } = await supabase
-        .from("drug_master")
-        .select("id, drug_name")
+      const { data: word } = await supabase
+        .from("drug_master").select("id, drug_name")
         .eq("hospital_id", hospitalId)
         .ilike("drug_name", `%${searchWord}%`)
-        .eq("is_active", true)
-        .limit(3);
+        .eq("is_active", true).limit(3);
 
-      const match = matches?.length === 1 ? matches[0] : null;
+      const match = word?.length === 1 ? word[0] : null;
       return {
         drugId: match?.id || "",
         drugName: match?.drug_name || item.name,
@@ -110,14 +143,80 @@ const ReceiveStockModal: React.FC<Props> = ({ hospitalId, onClose, onSaved }) =>
       toast({ title: "Please fill supplier name and invoice number", variant: "destructive" });
       return;
     }
-    const validItems = items.filter((it) => it.drugId && it.batchNumber && it.expiryDate && it.quantity > 0);
-    if (validItems.length === 0) {
+
+    // Accept items that have a name (even unlinked) + batch + expiry + qty
+    const saveableItems = items.filter((it) => {
+      const hasName = it.drugId || (it.drugName || it.extractedName || "").trim();
+      return hasName && it.batchNumber && it.expiryDate && it.quantity > 0;
+    });
+
+    if (saveableItems.length === 0) {
       toast({ title: "Add at least one valid drug item", variant: "destructive" });
       return;
     }
 
     setSaving(true);
-    const batches = validItems.map((it) => ({
+
+    // For unmatched items: check exact match first, then auto-create only if truly missing
+    const resolvedItems = await Promise.all(saveableItems.map(async (it) => {
+      if (it.drugId) return it;
+
+      const drugName = (it.drugName || it.extractedName || "").trim();
+
+      // Check if drug already exists (exact name match) before creating
+      const { data: exactExisting } = await (supabase as any)
+        .from("drug_master")
+        .select("id")
+        .eq("hospital_id", hospitalId)
+        .ilike("drug_name", drugName)
+        .maybeSingle();
+
+      if (exactExisting) return { ...it, drugId: exactExisting.id };
+
+      // Truly new drug — create it
+      const { data: newDrug } = await (supabase as any)
+        .from("drug_master")
+        .insert({ hospital_id: hospitalId, drug_name: drugName, is_active: true, gst_percent: it.gstPercent || 12 })
+        .select("id")
+        .maybeSingle();
+
+      return { ...it, drugId: newDrug?.id || "" };
+    }));
+
+    const validResolved = resolvedItems.filter((it) => it.drugId);
+    if (validResolved.length === 0) {
+      setSaving(false);
+      toast({ title: "Could not resolve drug entries. Please try again.", variant: "destructive" });
+      return;
+    }
+
+    const newDrugsCreated = resolvedItems.filter((it) => {
+      const original = saveableItems.find((s) => (s.drugName || s.extractedName) === (it.drugName || it.extractedName));
+      return original && !original.drugId && it.drugId;
+    }).length;
+
+    // Check for already-existing (drug_id, batch_number) pairs to skip duplicates
+    const drugIds = validResolved.map((i) => i.drugId);
+    const batchNums = validResolved.map((i) => i.batchNumber).filter(Boolean);
+    const { data: existingBatches } = await supabase
+      .from("drug_batches")
+      .select("drug_id, batch_number")
+      .eq("hospital_id", hospitalId)
+      .in("drug_id", drugIds)
+      .in("batch_number", batchNums);
+
+    const toInsert = validResolved.filter(
+      (it) => !existingBatches?.some((b) => b.drug_id === it.drugId && b.batch_number === it.batchNumber)
+    );
+    const skippedCount = validResolved.length - toInsert.length;
+
+    if (toInsert.length === 0) {
+      setSaving(false);
+      toast({ title: "All batches already exist in stock — no new stock added.", description: "This invoice may have already been entered." });
+      return;
+    }
+
+    const batches = toInsert.map((it) => ({
       hospital_id: hospitalId,
       drug_id: it.drugId,
       batch_number: it.batchNumber,
@@ -133,12 +232,16 @@ const ReceiveStockModal: React.FC<Props> = ({ hospitalId, onClose, onSaved }) =>
       gst_percent: it.gstPercent,
     }));
 
-    const { error } = await supabase.from("drug_batches").insert(batches);
+    const { error } = await supabase.from("drug_batches").insert(batches as any);
     setSaving(false);
 
     if (error) {
       toast({ title: "Error saving stock", description: error.message, variant: "destructive" });
     } else {
+      const parts: string[] = [`${toInsert.length} item${toInsert.length !== 1 ? "s" : ""} saved`];
+      if (newDrugsCreated > 0) parts.push(`${newDrugsCreated} new drug${newDrugsCreated > 1 ? "s" : ""} added to master`);
+      if (skippedCount > 0) parts.push(`${skippedCount} duplicate batch${skippedCount > 1 ? "es" : ""} skipped`);
+      toast({ title: `GRN saved — ${parts.join(", ")}` });
       onSaved();
     }
   };
@@ -195,7 +298,7 @@ const ReceiveStockModal: React.FC<Props> = ({ hospitalId, onClose, onSaved }) =>
                   {it.extractedName && it.extractedName !== it.drugName && (
                     <p className="text-[10px] italic text-muted-foreground">Scanned: {it.extractedName}</p>
                   )}
-                  {it.matchStatus === "unmatched" && <p className="text-[10px] text-amber-600">⚠️ Not in drug master — search to link</p>}
+                  {it.matchStatus === "unmatched" && <p className="text-[10px] text-amber-600">⚠️ Not in drug master — will be added as new drug on save</p>}
                   <div className="grid grid-cols-[1fr_auto] gap-2">
                     <div className="relative">
                       <Input
@@ -261,7 +364,7 @@ const ReceiveStockModal: React.FC<Props> = ({ hospitalId, onClose, onSaved }) =>
           </div>
 
           <div className="bg-muted/50 rounded-lg p-3 flex justify-between text-sm">
-            <span>Total Items: <strong>{items.filter((i) => i.drugId).length}</strong></span>
+            <span>Total Items: <strong>{items.filter((i) => i.drugId || (i.drugName || i.extractedName || "").trim()).length}</strong></span>
             <span>Total Value: <strong className="tabular-nums">₹{totalValue.toFixed(2)}</strong></span>
           </div>
         </div>

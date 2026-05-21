@@ -1,3 +1,5 @@
+// WARNING: Patient encounter data (PHI) is sent to ai.gateway.lovable.dev.
+// Ensure a Data Processing Agreement (DPA) covering PHI is in place with Lovable before production use.
 // @ts-ignore: Deno HTTP imports resolved by Supabase Edge Function runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -17,10 +19,26 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { encounterId, hospitalId, specialty, rawNotes } = await req.json();
+    // Auth verification
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // @ts-ignore: Deno is available in Supabase Edge Functions
+    const anonClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!);
+    const { data: { user }, error: authError } = await anonClient.auth.getUser(authHeader.replace("Bearer ", ""));
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    if (!encounterId || !hospitalId) {
-      return new Response(JSON.stringify({ error: "encounterId, hospitalId required" }), {
+    const { encounterId, specialty, rawNotes } = await req.json();
+
+    if (!encounterId) {
+      return new Response(JSON.stringify({ error: "encounterId required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -34,10 +52,20 @@ Deno.serve(async (req: Request) => {
     }
 
     // @ts-ignore: Deno is available in Supabase Edge Functions
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    // @ts-ignore: Deno is available in Supabase Edge Functions
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const sb = createClient(supabaseUrl, supabaseKey);
+    const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // Resolve hospital from authenticated user (ignore any hospitalId from request body)
+    const { data: userData } = await sb
+      .from("users")
+      .select("hospital_id")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+    if (!userData) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const hospitalId = userData.hospital_id;
 
     const { data: encounter, error: encError } = await sb
       .from("opd_encounters")

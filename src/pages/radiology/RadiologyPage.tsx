@@ -37,6 +37,13 @@ export interface Modality {
   is_active: boolean;
 }
 
+interface PendingOpdRadOrder {
+  prescriptionId: string;
+  encounterId: string;
+  patient: { id: string; full_name: string; uhid: string; gender: string | null; dob: string | null };
+  studies: { study_name: string }[];
+}
+
 const RadiologyPage: React.FC = () => {
   const { toast } = useToast();
   const [orders, setOrders] = useState<RadiologyOrder[]>([]);
@@ -46,6 +53,10 @@ const RadiologyPage: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split("T")[0]);
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [hospitalId, setHospitalId] = useState<string | null>(null);
+  const [pendingOpdOrders, setPendingOpdOrders] = useState<PendingOpdRadOrder[]>([]);
+  const [pendingOrderPatient, setPendingOrderPatient] = useState<PendingOpdRadOrder["patient"] | null>(null);
+  const [pendingOrderStudyNames, setPendingOrderStudyNames] = useState<string[]>([]);
+  const [pendingOrderEncounterId, setPendingOrderEncounterId] = useState<string | null>(null);
 
   const fetchHospitalId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -73,7 +84,7 @@ const RadiologyPage: React.FC = () => {
 
   const fetchOrders = useCallback(async () => {
     if (!hospitalId) return;
-    let query = supabase
+    const { data, error } = await supabase
       .from("radiology_orders")
       .select(`
         id, priority, status, order_date, order_time, study_name, body_part, ai_flag,
@@ -89,14 +100,10 @@ const RadiologyPage: React.FC = () => {
       .neq("status", "cancelled")
       .order("order_time", { ascending: true });
 
-    if (filterModality !== "all") {
-      query = query.eq("modality_type", filterModality);
-    }
-
-    const { data, error } = await query;
-
     if (error) {
-      console.error("Radiology orders fetch error:", error);
+      console.error("Radiology orders fetch error:", error.message, error);
+      // Show toast so the user knows the fetch failed (not just a silent empty list)
+      toast({ title: "Failed to load worklist", description: error.message, variant: "destructive" });
     } else {
       const sorted = (data || []).sort((a: any, b: any) => {
         const p: Record<string, number> = { stat: 0, urgent: 1, routine: 2 };
@@ -104,22 +111,65 @@ const RadiologyPage: React.FC = () => {
       });
       setOrders(sorted as any);
     }
-  }, [hospitalId, selectedDate, filterModality]);
+  }, [hospitalId, selectedDate]);
+
+  const fetchPendingOpdOrders = useCallback(async () => {
+    if (!hospitalId) return;
+    const today = new Date().toISOString().split("T")[0];
+
+    const [{ data: prescriptions }, { data: processed }] = await Promise.all([
+      supabase
+        .from("prescriptions")
+        .select("id, encounter_id, patient_id, radiology_orders, patients(id, full_name, uhid, gender, dob)")
+        .eq("hospital_id", hospitalId)
+        .eq("prescription_date", today)
+        .neq("radiology_orders", "[]"),
+      supabase
+        .from("radiology_orders")
+        .select("encounter_id")
+        .eq("hospital_id", hospitalId)
+        .eq("order_date", today)
+        .not("encounter_id", "is", null),
+    ]);
+
+    const processedSet = new Set((processed || []).map((o: any) => o.encounter_id));
+
+    setPendingOpdOrders(
+      (prescriptions || [])
+        .filter((p: any) =>
+          p.encounter_id &&
+          !processedSet.has(p.encounter_id) &&
+          Array.isArray(p.radiology_orders) &&
+          p.radiology_orders.length > 0
+        )
+        .map((p: any) => ({
+          prescriptionId: p.id,
+          encounterId: p.encounter_id,
+          patient: p.patients,
+          studies: p.radiology_orders,
+        }))
+    );
+  }, [hospitalId]);
 
   useEffect(() => { fetchHospitalId(); }, [fetchHospitalId]);
-  useEffect(() => { if (hospitalId) { fetchModalities(); fetchOrders(); } }, [hospitalId, fetchModalities, fetchOrders]);
+  useEffect(() => { if (hospitalId) { fetchModalities(); fetchOrders(); fetchPendingOpdOrders(); } }, [hospitalId, fetchModalities, fetchOrders, fetchPendingOpdOrders]);
 
   // Realtime
   useEffect(() => {
     if (!hospitalId) return;
     const channel = supabase
       .channel("radiology-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "radiology_orders", filter: `hospital_id=eq.${hospitalId}` }, () => fetchOrders())
+      .on("postgres_changes", { event: "*", schema: "public", table: "radiology_orders", filter: `hospital_id=eq.${hospitalId}` }, () => { fetchOrders(); fetchPendingOpdOrders(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "prescriptions", filter: `hospital_id=eq.${hospitalId}` }, () => fetchPendingOpdOrders())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [hospitalId, fetchOrders]);
+  }, [hospitalId, fetchOrders, fetchPendingOpdOrders]);
 
   const selectedOrder = orders.find((o) => o.id === selectedOrderId) || null;
+
+  const filteredOrders = filterModality === "all"
+    ? orders
+    : orders.filter(o => o.modality_type === filterModality);
 
   const statCounts = {
     pending: orders.filter(o => ["ordered", "scheduled", "patient_arrived"].includes(o.status)).length,
@@ -132,7 +182,7 @@ const RadiologyPage: React.FC = () => {
     <div className="flex h-full overflow-hidden">
       {/* Left: Worklist */}
       <RadiologyWorklist
-        orders={orders}
+        orders={filteredOrders}
         modalities={modalities}
         selectedOrderId={selectedOrderId}
         onSelectOrder={setSelectedOrderId}
@@ -142,6 +192,13 @@ const RadiologyPage: React.FC = () => {
         onDateChange={setSelectedDate}
         statCounts={statCounts}
         onNewOrder={() => setShowNewOrder(true)}
+        pendingOpdOrders={pendingOpdOrders}
+        onCreateFromOpd={(patient, studyNames, encounterId) => {
+          setPendingOrderPatient(patient);
+          setPendingOrderStudyNames(studyNames);
+          setPendingOrderEncounterId(encounterId);
+          setShowNewOrder(true);
+        }}
       />
 
       {/* Right: Workspace */}
@@ -166,11 +223,21 @@ const RadiologyPage: React.FC = () => {
         <NewRadiologyOrderModal
           hospitalId={hospitalId}
           modalities={modalities}
-          onClose={() => setShowNewOrder(false)}
-          onCreated={() => {
-            fetchOrders();
+          onClose={() => {
             setShowNewOrder(false);
+            setPendingOrderPatient(null);
+            setPendingOrderStudyNames([]);
+            setPendingOrderEncounterId(null);
           }}
+          onCreated={() => {
+            setSelectedDate(new Date().toISOString().split("T")[0]);
+            setFilterModality("all");
+            fetchOrders();
+            fetchPendingOpdOrders();
+          }}
+          preselectedPatient={pendingOrderPatient ?? undefined}
+          preselectedStudyNames={pendingOrderStudyNames}
+          linkedEncounterId={pendingOrderEncounterId}
         />
       )}
     </div>

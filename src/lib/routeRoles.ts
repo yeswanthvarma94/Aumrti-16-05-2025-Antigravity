@@ -19,6 +19,7 @@ ROUTE_ROLES['/insurance'] = ['billing_executive', 'insurance_executive', 'super_
 ROUTE_ROLES['/lab'] = ['lab_technician', 'lab_tech', 'doctor', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/radiology'] = ['radiologist', 'doctor', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/admin/go-live'] = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/design-system'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/admin/data-migration'] = ['super_admin', 'hospital_admin'];
 
 // Core authenticated routes
@@ -124,7 +125,7 @@ export function hasAccess(
 
   // 3. Fallback to Static System Definitions
   const allowedRoles = ROUTE_ROLES[normalizedPath];
-  if (!allowedRoles) return true;
+  if (!allowedRoles) return false;
   
   return allowedRoles.includes(role);
 }

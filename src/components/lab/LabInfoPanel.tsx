@@ -21,6 +21,8 @@ interface LabOrder {
 interface Props {
   selectedOrder: LabOrder | null;
   onSelectOrder?: (id: string) => void;
+  onAddTestToOrder?: (patient: LabOrder["patients"]) => void;
+  onRepeatOrder?: (patient: LabOrder["patients"], testNames: string[]) => void;
 }
 
 function getInitials(name: string) {
@@ -53,7 +55,7 @@ const PRIORITY_COLORS: Record<string, string> = {
   routine: "bg-muted text-muted-foreground",
 };
 
-const LabInfoPanel: React.FC<Props> = ({ selectedOrder, onSelectOrder }) => {
+const LabInfoPanel: React.FC<Props> = ({ selectedOrder, onSelectOrder, onAddTestToOrder, onRepeatOrder }) => {
   const { toast } = useToast();
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
 
@@ -215,10 +217,21 @@ const LabInfoPanel: React.FC<Props> = ({ selectedOrder, onSelectOrder }) => {
 
       {/* Quick Actions */}
       <div className="p-3 border-t border-border shrink-0 space-y-1.5">
-        <button className="w-full h-9 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+        <button
+          onClick={() => onAddTestToOrder?.(selectedOrder.patients)}
+          className="w-full h-9 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center justify-center gap-1.5"
+        >
           <Plus size={13} /> Add Test to Order
         </button>
-        <button className="w-full h-9 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center justify-center gap-1.5">
+        <button
+          onClick={() => {
+            const testNames = (selectedOrder.lab_order_items || [])
+              .map((i: any) => i.lab_test_master?.test_name)
+              .filter(Boolean) as string[];
+            onRepeatOrder?.(selectedOrder.patients, testNames);
+          }}
+          className="w-full h-9 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center justify-center gap-1.5"
+        >
           <RotateCcw size={13} /> Repeat Order
         </button>
       </div>

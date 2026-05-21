@@ -552,19 +552,11 @@ const RxOrdersTab: React.FC<Props> = ({ prescription, onChange, hospitalId, pati
                           </span>
                         ) : (
                           <span className="text-[9px] text-amber-600 font-bold flex items-center gap-1">
-                            <AlertTriangle size={10} /> DRAFT (UNBILLED)
+                            <AlertTriangle size={10} /> DRAFT (PENDING)
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5">
-                        {!isOrdered && (
-                          <button 
-                            onClick={() => (window as any).triggerLabOrderModal?.([l.test_name])}
-                            className="text-[9px] bg-primary/10 text-primary px-1.5 py-0.5 rounded border border-primary/20 hover:bg-primary/20"
-                          >
-                            Bill Now
-                          </button>
-                        )}
                         <button onClick={() => removeLab(i)}><X className="h-3 w-3 text-muted-foreground hover:text-destructive" /></button>
                       </div>
                     </div>
@@ -623,19 +615,11 @@ const RxOrdersTab: React.FC<Props> = ({ prescription, onChange, hospitalId, pati
                           </span>
                         ) : (
                           <span className="text-[9px] text-amber-600 font-bold flex items-center gap-1">
-                            <AlertTriangle size={10} /> DRAFT (UNBILLED)
+                            <AlertTriangle size={10} /> DRAFT (PENDING)
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5">
-                        {!isOrdered && (
-                          <button 
-                            onClick={() => (window as any).triggerRadiologyOrderModal?.([r.study_name])}
-                            className="text-[9px] bg-primary/10 text-primary px-1.5 py-0.5 rounded border border-primary/20 hover:bg-primary/20"
-                          >
-                            Bill Now
-                          </button>
-                        )}
                         <button onClick={() => removeRad(i)}><X className="h-3 w-3 text-muted-foreground hover:text-destructive" /></button>
                       </div>
                     </div>

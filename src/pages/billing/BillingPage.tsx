@@ -55,6 +55,8 @@ const BillingPage: React.FC = () => {
   const [showAdvance, setShowAdvance] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("today");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [dischargeBillCreated, setDischargeBillCreated] = useState(false);
   const [activeTab, setActiveTab] = useState("bills");
 
@@ -209,15 +211,22 @@ const BillingPage: React.FC = () => {
         dateStart = m.toISOString().slice(0, 10);
         break;
       }
+      case "custom":
+        dateStart = startDate || todayStr;
+        break;
       default:
         dateStart = todayStr;
     }
+
+    const dateEnd = dateFilter === "custom" ? (endDate || dateStart) : todayStr;
 
     let query = supabase
       .from("bills")
       .select("*, patients!inner(full_name, uhid)")
       .eq("hospital_id", hospitalId)
       .gte("bill_date", dateStart)
+      .lte("bill_date", dateEnd)
+      .gt("total_amount", 0)
       .order("created_at", { ascending: false });
 
     if (statusFilter !== "all") {
@@ -313,7 +322,7 @@ const BillingPage: React.FC = () => {
 
     setBills([...virtualBills, ...realBills]);
     setLoading(false);
-  }, [hospitalId, statusFilter, dateFilter]);
+  }, [hospitalId, statusFilter, dateFilter, startDate, endDate]);
 
   useEffect(() => {
     fetchBills();
@@ -405,6 +414,10 @@ const BillingPage: React.FC = () => {
             onStatusFilter={setStatusFilter}
             dateFilter={dateFilter}
             onDateFilter={setDateFilter}
+            startDate={startDate}
+            endDate={endDate}
+            onStartDate={(d) => { setStartDate(d); setDateFilter("custom"); }}
+            onEndDate={(d) => { setEndDate(d); setDateFilter("custom"); }}
             onNewBill={() => setShowNewBill(true)}
             onAdvanceReceipt={() => setShowAdvance(true)}
             todayCollection={todayCollection}

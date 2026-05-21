@@ -1,8 +1,14 @@
-import React from "react";
+import React, { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Plus, Clock } from "lucide-react";
-import { format } from "date-fns";
+import { Plus, Clock, ChevronDown, ChevronUp, FlaskConical } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
+
+interface PendingOpdLabOrder {
+  prescriptionId: string;
+  encounterId: string;
+  patient: { id: string; full_name: string; uhid: string; gender: string | null; dob: string | null };
+  labTests: { test_name: string }[];
+}
 
 interface LabOrder {
   id: string;
@@ -10,7 +16,7 @@ interface LabOrder {
   status: string;
   order_time: string;
   patients: { full_name: string; uhid: string; gender: string | null; dob: string | null } | null;
-  lab_order_items: { id: string; status: string; test_id: string; lab_test_master: { tat_minutes: number } | null }[];
+  lab_order_items: { id: string; status: string; test_id: string; validated_at: string | null; lab_test_master: { tat_minutes: number } | null }[];
 }
 
 interface Props {
@@ -19,10 +25,14 @@ interface Props {
   onSelectOrder: (id: string) => void;
   filterTab: string;
   onFilterChange: (tab: string) => void;
+  selectedDate: string;
+  onDateChange: (d: string) => void;
   statCount: number;
   urgentCount: number;
   routineCount: number;
   onNewOrder: () => void;
+  pendingOpdOrders?: PendingOpdLabOrder[];
+  onCreateFromOpd?: (patient: PendingOpdLabOrder["patient"], testNames: string[], encounterId: string) => void;
 }
 
 const FILTER_TABS = [
@@ -51,8 +61,16 @@ function getAge(dob: string | null): string {
   return `${age}y`;
 }
 
-function getTatInfo(orderTime: string, items: LabOrder["lab_order_items"]) {
-  const elapsed = (Date.now() - new Date(orderTime).getTime()) / 60000;
+function getTatInfo(orderTime: string, items: LabOrder["lab_order_items"], isCompleted: boolean) {
+  // For completed orders, freeze the TAT at the latest validated_at timestamp
+  const latestValidated = isCompleted
+    ? items.reduce<string | null>((latest, i) => {
+        if (!i.validated_at) return latest;
+        return !latest || i.validated_at > latest ? i.validated_at : latest;
+      }, null)
+    : null;
+  const endMs = latestValidated ? new Date(latestValidated).getTime() : Date.now();
+  const elapsed = (endMs - new Date(orderTime).getTime()) / 60000;
   const avgTat = items.length > 0
     ? items.reduce((s, i) => s + (i.lab_test_master?.tat_minutes || 60), 0) / items.length
     : 60;
@@ -60,38 +78,67 @@ function getTatInfo(orderTime: string, items: LabOrder["lab_order_items"]) {
   const mins = Math.floor(elapsed % 60);
   const label = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
   const ratio = elapsed / avgTat;
-  const color = ratio > 1 ? "text-destructive font-bold" : ratio > 0.75 ? "text-amber-600" : "text-emerald-600";
+  const color = isCompleted
+    ? "text-emerald-600"
+    : ratio > 1 ? "text-destructive font-bold"
+    : ratio > 0.75 ? "text-amber-600"
+    : "text-emerald-600";
   return { label, color };
 }
 
 const LabQueuePanel: React.FC<Props> = ({
   orders, selectedOrderId, onSelectOrder, filterTab, onFilterChange,
+  selectedDate, onDateChange,
   statCount, urgentCount, routineCount, onNewOrder,
+  pendingOpdOrders = [], onCreateFromOpd,
 }) => {
+  const [opdExpanded, setOpdExpanded] = useState(true);
+  const today = new Date().toISOString().split("T")[0];
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+
   return (
     <div className="w-[280px] shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-border shrink-0">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold text-foreground">Lab Queue</h2>
-          <span className="text-xs text-muted-foreground">{format(new Date(), "dd MMM yyyy")}</span>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-bold text-foreground shrink-0">Lab Queue</h2>
+          <select
+            value={filterTab}
+            onChange={(e) => onFilterChange(e.target.value)}
+            className="flex-1 text-[11px] font-medium rounded-md border border-border bg-muted text-foreground px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[hsl(var(--sidebar-background))] cursor-pointer"
+          >
+            {FILTER_TABS.map((t) => (
+              <option key={t.key} value={t.key}>{t.label}</option>
+            ))}
+          </select>
         </div>
-        <div className="flex gap-1.5 mt-2 overflow-x-auto">
-          {FILTER_TABS.map((t) => (
-            <button
-              key={t.key}
-              onClick={() => onFilterChange(t.key)}
-              className={cn(
-                "px-3 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition-colors",
-                filterTab === t.key
-                  ? "bg-[hsl(var(--sidebar-background))] text-white"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80"
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      </div>
+
+      {/* Date filter */}
+      <div className="shrink-0 bg-muted/50 border-b border-border px-3 py-1.5 flex items-center gap-1.5">
+        {[
+          { label: "Today", val: today },
+          { label: "Yesterday", val: yesterday },
+        ].map((d) => (
+          <button
+            key={d.val}
+            onClick={() => onDateChange(d.val)}
+            className={cn(
+              "px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors",
+              selectedDate === d.val
+                ? "bg-[hsl(var(--sidebar-background))] text-white"
+                : "bg-card text-muted-foreground hover:bg-muted"
+            )}
+          >
+            {d.label}
+          </button>
+        ))}
+        <input
+          type="date"
+          value={selectedDate}
+          onChange={(e) => onDateChange(e.target.value)}
+          className="ml-auto text-[10px] bg-card border border-border rounded px-1.5 py-0.5 text-foreground"
+        />
       </div>
 
       {/* Stats bar */}
@@ -100,6 +147,48 @@ const LabQueuePanel: React.FC<Props> = ({
         <span className="text-amber-600">🟡 {urgentCount} Urgent</span>
         <span className="text-emerald-600">🟢 {routineCount} Routine</span>
       </div>
+
+      {/* Pending from OPD */}
+      {pendingOpdOrders.length > 0 && (
+        <div className="shrink-0 border-b border-amber-200 bg-amber-50/60">
+          <button
+            onClick={() => setOpdExpanded((v) => !v)}
+            className="w-full flex items-center justify-between px-3 py-2 text-left"
+          >
+            <div className="flex items-center gap-1.5">
+              <FlaskConical size={13} className="text-amber-600" />
+              <span className="text-[11px] font-bold text-amber-700">Pending from OPD</span>
+              <span className="text-[10px] bg-amber-500 text-white rounded-full px-1.5 py-0.5 font-bold">
+                {pendingOpdOrders.length}
+              </span>
+            </div>
+            {opdExpanded ? <ChevronUp size={13} className="text-amber-600" /> : <ChevronDown size={13} className="text-amber-600" />}
+          </button>
+          {opdExpanded && (
+            <div className="px-2 pb-2 space-y-1.5">
+              {pendingOpdOrders.map((item) => (
+                <div key={item.prescriptionId} className="bg-white rounded-lg border border-amber-200 p-2">
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-semibold text-foreground truncate">{item.patient.full_name}</p>
+                      <p className="text-[10px] text-muted-foreground">{item.patient.uhid}</p>
+                      <p className="text-[10px] text-amber-700 mt-0.5 truncate">
+                        {item.labTests.map((t) => t.test_name).join(", ")}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => onCreateFromOpd?.(item.patient, item.labTests.map((t) => t.test_name), item.encounterId)}
+                      className="shrink-0 text-[10px] bg-amber-500 text-white px-2 py-1 rounded font-semibold hover:bg-amber-600 transition-colors"
+                    >
+                      Create & Bill
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Order list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
@@ -115,7 +204,7 @@ const LabQueuePanel: React.FC<Props> = ({
           const testCount = items.length;
           const reportedCount = items.filter((i) => i.status === "reported").length;
           const progress = testCount > 0 ? (reportedCount / testCount) * 100 : 0;
-          const tat = getTatInfo(order.order_time, items);
+          const tat = getTatInfo(order.order_time, items, order.status === "completed");
           const patient = order.patients;
           const selected = order.id === selectedOrderId;
 

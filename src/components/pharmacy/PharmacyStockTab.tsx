@@ -22,7 +22,8 @@ interface DrugWithStock {
   total_stock: number;
   batch_count: number;
   batches: BatchInfo[];
-  status: "available" | "low_stock" | "out_of_stock" | "expiring";
+  status: "available" | "low_stock" | "out_of_stock" | "expiring" | "expired";
+  has_expired_batches: boolean;
 }
 
 interface BatchInfo {
@@ -38,6 +39,7 @@ interface BatchInfo {
 const PharmacyStockTab: React.FC<Props> = ({ hospitalId, onReceiveStock }) => {
   const [drugs, setDrugs] = useState<DrugWithStock[]>([]);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [expandedDrug, setExpandedDrug] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -66,16 +68,22 @@ const PharmacyStockTab: React.FC<Props> = ({ hospitalId, onReceiveStock }) => {
     }
 
     const now = new Date();
+    const today = new Date(now.toISOString().split("T")[0]);
     const thirtyDays = new Date(now);
     thirtyDays.setDate(thirtyDays.getDate() + 30);
 
     const result: DrugWithStock[] = drugData.map((d: any) => {
       const batches = batchMap.get(d.id) || [];
       const totalStock = batches.reduce((s: number, b: BatchInfo) => s + b.quantity_available, 0);
-      const hasExpiring = batches.some((b: BatchInfo) => new Date(b.expiry_date) <= thirtyDays);
+      const hasExpired = batches.some((b: BatchInfo) => new Date(b.expiry_date) < today);
+      const hasExpiring = batches.some((b: BatchInfo) => {
+        const exp = new Date(b.expiry_date);
+        return exp >= today && exp <= thirtyDays;
+      });
 
       let status: DrugWithStock["status"] = "available";
-      if (totalStock === 0) status = "out_of_stock";
+      if (hasExpired) status = "expired";
+      else if (totalStock === 0) status = "out_of_stock";
       else if (totalStock < (d.reorder_level || 10)) status = "low_stock";
       else if (hasExpiring) status = "expiring";
 
@@ -85,25 +93,53 @@ const PharmacyStockTab: React.FC<Props> = ({ hospitalId, onReceiveStock }) => {
         batch_count: batches.length,
         batches: batches.sort((a: BatchInfo, b: BatchInfo) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime()),
         status,
+        has_expired_batches: hasExpired,
       };
     });
 
-    setDrugs(result);
+    // Merge entries with same drug_name (handles duplicate drug_master rows)
+    const merged = new Map<string, DrugWithStock>();
+    for (const d of result) {
+      const key = d.drug_name.toLowerCase();
+      if (merged.has(key)) {
+        const existing = merged.get(key)!;
+        existing.total_stock += d.total_stock;
+        existing.batch_count += d.batch_count;
+        existing.batches = [...existing.batches, ...d.batches]
+          .sort((a: BatchInfo, b: BatchInfo) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime());
+        const mergedBatches = existing.batches;
+        const mergedHasExpired = mergedBatches.some((b: BatchInfo) => new Date(b.expiry_date) < today);
+        const mergedHasExpiring = mergedBatches.some((b: BatchInfo) => { const exp = new Date(b.expiry_date); return exp >= today && exp <= thirtyDays; });
+        existing.has_expired_batches = mergedHasExpired;
+        if (mergedHasExpired) existing.status = "expired";
+        else if (existing.total_stock === 0) existing.status = "out_of_stock";
+        else if (existing.total_stock < (existing.reorder_level || 10)) existing.status = "low_stock";
+        else if (mergedHasExpiring) existing.status = "expiring";
+        else existing.status = "available";
+      } else {
+        merged.set(key, { ...d });
+      }
+    }
+
+    setDrugs(Array.from(merged.values()));
     setLoading(false);
   }, [hospitalId]);
 
   useEffect(() => { fetchStock(); }, [fetchStock]);
 
-  const filtered = drugs.filter(
-    (d) =>
+  const filtered = drugs.filter((d) => {
+    const matchSearch =
       d.drug_name.toLowerCase().includes(search.toLowerCase()) ||
-      (d.generic_name || "").toLowerCase().includes(search.toLowerCase())
-  );
+      (d.generic_name || "").toLowerCase().includes(search.toLowerCase());
+    const matchStatus = statusFilter === "all" || d.status === statusFilter;
+    return matchSearch && matchStatus;
+  });
 
   const kpis = {
     totalSKUs: drugs.length,
-    lowStock: drugs.filter((d) => d.status === "low_stock").length,
+    expired: drugs.filter((d) => d.status === "expired").length,
     expiringMonth: drugs.filter((d) => d.status === "expiring").length,
+    lowStock: drugs.filter((d) => d.status === "low_stock").length,
     outOfStock: drugs.filter((d) => d.status === "out_of_stock").length,
   };
 
@@ -113,6 +149,7 @@ const PharmacyStockTab: React.FC<Props> = ({ hospitalId, onReceiveStock }) => {
       low_stock: { label: "Low Stock", cls: "bg-amber-100 text-amber-700" },
       out_of_stock: { label: "Out of Stock", cls: "bg-red-100 text-red-700" },
       expiring: { label: "Expiring Soon", cls: "bg-orange-100 text-orange-700" },
+      expired: { label: "⛔ Expired", cls: "bg-red-600 text-white" },
     };
     const v = map[s];
     return <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-medium", v.cls)}>{v.label}</span>;
@@ -148,19 +185,33 @@ const PharmacyStockTab: React.FC<Props> = ({ hospitalId, onReceiveStock }) => {
       </div>
 
       {/* KPI Row */}
-      <div className="flex-shrink-0 px-5 py-3 grid grid-cols-4 gap-3">
+      <div className="flex-shrink-0 px-5 py-3 grid grid-cols-5 gap-3">
         {[
-          { label: "Total SKUs", value: kpis.totalSKUs, color: "text-foreground" },
-          { label: "Low Stock", value: kpis.lowStock, color: "text-amber-600" },
-          { label: "Expiring This Month", value: kpis.expiringMonth, color: "text-orange-600" },
-          { label: "Out of Stock", value: kpis.outOfStock, color: "text-destructive" },
+          { key: "all",         label: "Total SKUs",        value: kpis.totalSKUs,    color: "text-foreground" },
+          { key: "expired",     label: "Expired",           value: kpis.expired,      color: "text-red-700" },
+          { key: "expiring",    label: "Expiring This Month", value: kpis.expiringMonth, color: "text-orange-600" },
+          { key: "low_stock",   label: "Low Stock",         value: kpis.lowStock,     color: "text-amber-600" },
+          { key: "out_of_stock",label: "Out of Stock",      value: kpis.outOfStock,   color: "text-destructive" },
         ].map((k) => (
-          <Card key={k.label} className="p-3">
+          <Card
+            key={k.key}
+            className={cn("p-3 cursor-pointer transition-all hover:shadow-md", statusFilter === k.key && "ring-2 ring-primary")}
+            onClick={() => setStatusFilter(statusFilter === k.key ? "all" : k.key)}
+          >
             <p className="text-[11px] text-muted-foreground font-medium uppercase">{k.label}</p>
             <p className={cn("text-2xl font-bold tabular-nums", k.color)}>{k.value}</p>
           </Card>
         ))}
       </div>
+
+      {/* Active filter label */}
+      {statusFilter !== "all" && (
+        <div className="flex-shrink-0 px-5 pb-2 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Filtered by:</span>
+          <span className="text-xs font-medium text-primary capitalize">{statusFilter.replace("_", " ")}</span>
+          <button onClick={() => setStatusFilter("all")} className="text-xs text-muted-foreground underline hover:text-foreground">Clear</button>
+        </div>
+      )}
 
       {/* Drug Table */}
       <div className="flex-1 overflow-auto px-5 pb-4">
@@ -220,16 +271,22 @@ const PharmacyStockTab: React.FC<Props> = ({ hospitalId, onReceiveStock }) => {
                           </thead>
                           <tbody>
                             {d.batches.map((b) => {
-                              const isExpiring = new Date(b.expiry_date) <= new Date(Date.now() + 30 * 86400000);
+                              const expDate = new Date(b.expiry_date);
+                              const todayCheck = new Date(new Date().toISOString().split("T")[0]);
+                              const isExpired = expDate < todayCheck;
+                              const isExpiring = !isExpired && expDate <= new Date(Date.now() + 30 * 86400000);
                               return (
-                                <tr key={b.id} className={cn("border-b border-border/30", isExpiring && "bg-orange-50/50")}>
-                                  <td className="py-1.5 px-2 font-mono">{b.batch_number}</td>
+                                <tr key={b.id} className={cn("border-b border-border/30", isExpired ? "bg-red-50" : isExpiring && "bg-orange-50/50")}>
+                                  <td className={cn("py-1.5 px-2 font-mono", isExpired && "line-through text-muted-foreground")}>{b.batch_number}</td>
                                   <td className="py-1.5 px-2">{b.manufacturer || "—"}</td>
-                                  <td className={cn("py-1.5 px-2", isExpiring && "text-destructive font-medium")}>
-                                    {new Date(b.expiry_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                                    {isExpiring && " ⚠️"}
+                                  <td className={cn("py-1.5 px-2 font-medium", isExpired ? "text-red-700" : isExpiring && "text-destructive")}>
+                                    {expDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                                    {isExpired
+                                      ? <span className="ml-1.5 text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold">EXPIRED</span>
+                                      : isExpiring && <span className="ml-1"> ⚠️</span>
+                                    }
                                   </td>
-                                  <td className="py-1.5 px-2 text-right font-semibold tabular-nums">{b.quantity_available}</td>
+                                  <td className={cn("py-1.5 px-2 text-right font-semibold tabular-nums", isExpired && "text-red-700")}>{b.quantity_available}</td>
                                   <td className="py-1.5 px-2 text-right tabular-nums">₹{Number(b.mrp).toFixed(2)}</td>
                                   <td className="py-1.5 px-2 text-right tabular-nums">₹{Number(b.cost_price).toFixed(2)}</td>
                                 </tr>

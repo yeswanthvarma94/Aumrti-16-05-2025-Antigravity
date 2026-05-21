@@ -40,9 +40,11 @@ const SEVERITY_STYLE: Record<string, string> = {
 const LabAnomalyDetector: React.FC<Props> = ({ patientId, hospitalId, currentResults, orderId }) => {
   const [loading, setLoading] = useState(false);
   const [anomalies, setAnomalies] = useState<Anomaly[] | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const runDetection = async () => {
     setLoading(true);
+    setErrorMsg(null);
     try {
       // Fetch last 6 months of results for trend analysis
       const { data: history } = await (supabase as any)
@@ -93,37 +95,60 @@ Provide max 4 anomalies, most critical first. Focus on actionable clinical insig
         maxTokens: 500,
       });
 
-      if (response.error || !response.text) {
-        setAnomalies([]);
+      if (response.error) {
+        setErrorMsg(response.error);
+        setLoading(false);
+        return;
+      }
+
+      if (!response.text) {
+        setErrorMsg("AI returned an empty response. Please try again.");
+        setLoading(false);
         return;
       }
 
       try {
         const clean = response.text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
         const parsed = JSON.parse(clean);
-        setAnomalies(Array.isArray(parsed) ? parsed : []);
-      } catch {
-        setAnomalies([]);
-      }
+        const result = Array.isArray(parsed) ? parsed : [];
+        setAnomalies(result);
 
-      await (supabase as any).from("ai_feature_logs").insert({
-        hospital_id: hospitalId,
-        module: "lab",
-        feature_key: "lab_anomaly",
-        patient_id: patientId,
-        input_summary: `${currentResults.filter(r => r.result_value).length} results, ${Object.keys(trendMap).length} with history`,
-        output_summary: `${anomalies?.length ?? 0} anomalies`,
-        success: true,
-      });
+        await (supabase as any).from("ai_feature_logs").insert({
+          hospital_id: hospitalId,
+          module: "lab",
+          feature_key: "lab_anomaly",
+          patient_id: patientId,
+          input_summary: `${currentResults.filter(r => r.result_value).length} results, ${Object.keys(trendMap).length} with history`,
+          output_summary: `${result.length} anomalies`,
+          success: true,
+        });
+      } catch {
+        setErrorMsg("AI response could not be parsed. Please try again.");
+      }
     } catch (e) {
       console.error("Lab anomaly detection error:", e);
-      setAnomalies([]);
+      setErrorMsg(e instanceof Error ? e.message : "Unexpected error during analysis.");
     }
     setLoading(false);
   };
 
   const validResults = currentResults.filter((r) => r.result_value);
   if (validResults.length === 0) return null;
+
+  if (errorMsg) {
+    return (
+      <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <AlertTriangle size={13} className="text-red-500 shrink-0" />
+          <span className="text-xs text-red-700 truncate">{errorMsg}</span>
+        </div>
+        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 ml-2 shrink-0" onClick={runDetection} disabled={loading}>
+          {loading ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (anomalies === null) {
     return (
@@ -143,8 +168,11 @@ Provide max 4 anomalies, most critical first. Focus on actionable clinical insig
 
   if (anomalies.length === 0) {
     return (
-      <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-        <Sparkles size={12} /> AI analysis complete — no significant anomalies detected
+      <div className="flex items-center justify-between bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+        <div className="flex items-center gap-2">
+          <Sparkles size={12} /> AI analysis complete — no significant anomalies detected
+        </div>
+        <button onClick={() => setAnomalies(null)} className="text-[10px] opacity-60 hover:opacity-100">Re-run</button>
       </div>
     );
   }

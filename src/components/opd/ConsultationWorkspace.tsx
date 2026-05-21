@@ -4,8 +4,6 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Stethoscope, Mic, Save, CheckCircle, FlaskConical, Building2, Smartphone, ArrowUpRight, User, X, ScanLine, SendHorizonal, Printer } from "lucide-react";
 import AdmitPatientModal from "@/components/ipd/AdmitPatientModal";
-import NewLabOrderModal from "@/components/lab/NewLabOrderModal";
-import NewRadiologyOrderModal from "@/components/radiology/NewRadiologyOrderModal";
 import type { OpdToken } from "@/pages/opd/OPDPage";
 import VoiceDictationButton from "@/components/voice/VoiceDictationButton";
 import { useVoiceScribe } from "@/contexts/VoiceScribeContext";
@@ -114,10 +112,6 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
   const radStudyNamesRef = useRef<Set<string>>(new Set());
   const [deptName, setDeptName] = useState<string | null>(null);
   const [showAdmitModal, setShowAdmitModal] = useState(false);
-  const [showLabModal, setShowLabModal] = useState(false);
-  const [showRadiologyModal, setShowRadiologyModal] = useState(false);
-  const [preselectedLabTests, setPreselectedLabTests] = useState<string[]>([]);
-  const [preselectedRadStudies, setPreselectedRadStudies] = useState<string[]>([]);
   const [showReferralModal, setShowReferralModal] = useState(false);
   const [hospitalInfo, setHospitalInfo] = useState<any>(null);
 
@@ -133,20 +127,6 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
-  useEffect(() => {
-    (window as any).triggerLabOrderModal = (preselectedNames?: string[]) => {
-      setPreselectedLabTests(preselectedNames || []);
-      setShowLabModal(true);
-    };
-    (window as any).triggerRadiologyOrderModal = (preselectedNames?: string[]) => {
-      setPreselectedRadStudies(preselectedNames || []);
-      setShowRadiologyModal(true);
-    };
-    return () => {
-      delete (window as any).triggerLabOrderModal;
-      delete (window as any).triggerRadiologyOrderModal;
-    };
-  }, []);
 
   // Load hospital info
   useEffect(() => {
@@ -949,43 +929,6 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
           <Printer className="h-3.5 w-3.5" /> Print Rx
         </button>
       </div>
-      {showLabModal && token && hospitalId && (
-        <NewLabOrderModal
-          hospitalId={hospitalId}
-          onClose={() => { setShowLabModal(false); setPreselectedLabTests([]); }}
-          onCreated={() => { setShowLabModal(false); setPreselectedLabTests([]); }}
-          preselectedPatient={{
-            id: token.patient_id,
-            full_name: token.patient?.full_name || "",
-            uhid: token.patient?.uhid || "",
-            gender: token.patient?.gender || null,
-            dob: token.patient?.dob || null,
-          }}
-          preselectedTestNames={preselectedLabTests}
-          linkedEncounterId={encounterId}
-        />
-      )}
-      {showRadiologyModal && hospitalId && token && (
-        <NewRadiologyOrderModal
-          hospitalId={hospitalId}
-          onClose={() => { setShowRadiologyModal(false); setPreselectedRadStudies([]); }}
-          onCreated={() => { 
-            setShowRadiologyModal(false); 
-            setPreselectedRadStudies([]);
-            toast({ title: "Radiology order created and billed" });
-          }}
-          modalities={[]}
-          preselectedPatient={{
-            id: token.patient_id,
-            full_name: token.patient?.full_name || "",
-            uhid: token.patient?.uhid || "",
-            gender: token.patient?.gender || null,
-            dob: token.patient?.dob || null,
-          }}
-          preselectedStudyNames={preselectedRadStudies}
-          linkedEncounterId={encounterId}
-        />
-      )}
       {showAdmitModal && token && hospitalId && (
         <AdmitPatientModal
           open={showAdmitModal}

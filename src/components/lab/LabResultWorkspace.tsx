@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useWhatsAppNotification } from "@/components/whatsapp/WhatsAppNotificationCard";
 import { sendLabResultReady } from "@/lib/whatsapp-notifications";
+import { printDocument, printHeader } from "@/lib/printUtils";
 import LabTrendPanel from "./LabTrendPanel";
 import LabAnomalyDetector from "./LabAnomalyDetector";
 
@@ -35,6 +36,7 @@ interface TestItem {
   reference_range: string | null;
   sample_barcode: string | null;
   sample_collected_at: string | null;
+  validated_at: string | null;
   critical_acknowledged: boolean;
   notes: string | null;
   test_name: string;
@@ -134,7 +136,7 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
       .select(`
         id, test_id, status, result_value, result_numeric, result_unit,
         result_flag, reference_range, sample_barcode, sample_collected_at,
-        critical_acknowledged, notes,
+        validated_at, critical_acknowledged, notes,
         lab_test_master!lab_order_items_test_id_fkey (
           test_name, test_code, category, unit, normal_min, normal_max,
           critical_low, critical_high, tat_minutes, sample_type
@@ -178,9 +180,25 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
     setSamples(data || []);
   }, [order.id]);
 
-  // Fetch history
+  // Fetch history — lazy, only when History tab is first opened.
+  // Uses two targeted indexed queries instead of the old hospital-wide scan + nested await waterfall.
   const fetchHistory = useCallback(async () => {
     if (!order.patient_id) return;
+
+    // Step 1: get this patient's previous completed order IDs (fast indexed lookup)
+    const { data: patientOrders } = await supabase
+      .from("lab_orders")
+      .select("id, order_date")
+      .eq("patient_id", order.patient_id)
+      .neq("id", order.id)
+      .in("status", ["completed"])
+      .order("order_date", { ascending: false })
+      .limit(20);
+
+    if (!patientOrders || patientOrders.length === 0) { setHistory([]); return; }
+
+    // Step 2: fetch items only for those order IDs (targeted, no hospital-wide scan)
+    const orderIds = patientOrders.map((o: any) => o.id);
     const { data } = await supabase
       .from("lab_order_items")
       .select(`
@@ -189,38 +207,41 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
         lab_test_master!lab_order_items_test_id_fkey (test_name, test_code),
         lab_orders!lab_order_items_lab_order_id_fkey (order_date)
       `)
-      .eq("hospital_id", (await supabase.from("lab_orders").select("hospital_id").eq("id", order.id).maybeSingle()).data?.hospital_id || "")
+      .in("lab_order_id", orderIds)
       .in("status", ["validated", "reported"])
       .not("result_value", "is", null)
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(100);
 
-    // Filter to same patient's orders
-    if (data) {
-      const orderIds = new Set<string>();
-      // Get all order ids for this patient
-      const { data: patientOrders } = await supabase
-        .from("lab_orders")
-        .select("id")
-        .eq("patient_id", order.patient_id)
-        .neq("id", order.id)
-        .order("order_date", { ascending: false })
-        .limit(20);
-      (patientOrders || []).forEach((o: any) => orderIds.add(o.id));
-      setHistory(data.filter((d: any) => orderIds.has(d.lab_order_id)));
-    }
+    setHistory(data || []);
   }, [order.id, order.patient_id]);
 
-  useEffect(() => { fetchItems(); fetchSamples(); fetchHistory(); }, [fetchItems, fetchSamples, fetchHistory]);
+  // Only load items + samples on mount; history is lazy-loaded on tab open
+  useEffect(() => {
+    fetchItems();
+    fetchSamples();
+  }, [fetchItems, fetchSamples]);
 
-  // TAT calculation
-  const elapsed = (Date.now() - new Date(order.order_time).getTime()) / 60000;
+  // TAT calculation — freeze at validated_at when the order is completed
+  const isCompleted = order.status === "completed";
+  const completedAt = isCompleted
+    ? items.reduce<string | null>((latest, i) => {
+        if (!i.validated_at) return latest;
+        return !latest || i.validated_at > latest ? i.validated_at : latest;
+      }, null)
+    : null;
+  const tatEndMs = completedAt ? new Date(completedAt).getTime() : Date.now();
+  const elapsed = (tatEndMs - new Date(order.order_time).getTime()) / 60000;
   const avgTat = items.length > 0
     ? items.reduce((s, i) => s + (i.tat_minutes || 60), 0) / items.length
     : 60;
   const tatRatio = elapsed / avgTat;
   const tatLabel = elapsed >= 60 ? `${Math.floor(elapsed / 60)}h ${Math.floor(elapsed % 60)}m` : `${Math.floor(elapsed)}m`;
-  const tatBg = tatRatio > 1 ? "bg-red-50 text-red-800" : tatRatio > 0.75 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800";
+  const tatBg = isCompleted
+    ? "bg-emerald-50 text-emerald-800"
+    : tatRatio > 1 ? "bg-red-50 text-red-800"
+    : tatRatio > 0.75 ? "bg-amber-50 text-amber-800"
+    : "bg-emerald-50 text-emerald-800";
 
   const patient = order.patients;
 
@@ -522,10 +543,19 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
 
         <div className="flex-1" />
 
-        {/* TAT display */}
-        <div className={cn("rounded-lg px-3.5 py-2 shrink-0", tatBg, tatRatio > 1 && "ring-1 ring-red-300 animate-pulse")}>
-          <p className="text-sm font-bold flex items-center gap-1"><Clock size={13} /> {tatLabel}</p>
-          <p className="text-[10px] opacity-70">Target: {Math.round(avgTat)}m</p>
+        {/* TAT display — frozen after release */}
+        <div className={cn("rounded-lg px-3.5 py-2 shrink-0", tatBg, !isCompleted && tatRatio > 1 && "ring-1 ring-red-300 animate-pulse")}>
+          {isCompleted ? (
+            <>
+              <p className="text-sm font-bold flex items-center gap-1"><CheckCircle2 size={13} /> Released</p>
+              <p className="text-[10px] opacity-70">TAT: {tatLabel}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-bold flex items-center gap-1"><Clock size={13} /> {tatLabel}</p>
+              <p className="text-[10px] opacity-70">Target: {Math.round(avgTat)}m</p>
+            </>
+          )}
         </div>
 
         {/* Status action */}
@@ -545,8 +575,10 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
         )}
       </div>
 
-      {/* Tabs */}
-      <Tabs defaultValue="results" className="flex-1 flex flex-col overflow-hidden">
+      {/* Tabs — History is lazy-loaded on first open */}
+      <Tabs defaultValue="results" className="flex-1 flex flex-col overflow-hidden"
+        onValueChange={(v) => { if (v === "history") fetchHistory(); }}
+      >
         <TabsList className="shrink-0 bg-card border-b border-border rounded-none h-11 w-full justify-start px-5 gap-0">
           <TabsTrigger value="results" className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">Results</TabsTrigger>
           <TabsTrigger value="sample" className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">Sample</TabsTrigger>
@@ -954,17 +986,73 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
         </button>
         <div className="flex-1" />
         <button onClick={() => {
-          // Print lab report
           const p = order.patients;
-          const testRows = items.map(i => {
-            const flagLabel = i.result_flag && FLAG_STYLES[i.result_flag]?.label ? ` (${FLAG_STYLES[i.result_flag].label})` : "";
-            const ref = i.normal_min != null && i.normal_max != null ? `${i.normal_min} – ${i.normal_max}` : i.normal_max != null ? `< ${i.normal_max}` : "—";
-            return `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">${i.test_name}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:600;${i.result_flag === 'H' || i.result_flag === 'CH' ? 'color:#B45309' : i.result_flag === 'L' || i.result_flag === 'CL' ? 'color:#1D4ED8' : ''}">${i.result_value || "—"}${flagLabel}</td><td style="padding:6px 10px;border-bottom:1px solid #eee">${i.unit || ""}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;color:#6B7280">${ref}</td></tr>`;
-          }).join("");
-          const nablLine = nablNumber ? `<span style="font-size:11px;color:#0369a1;margin-left:12px">NABL Accreditation No: ${nablNumber}</span>` : "";
-          const printHtml = `<html><head><title>Lab Report - ${p?.full_name}</title><style>body{font-family:Arial,sans-serif;padding:40px}table{width:100%;border-collapse:collapse}th{background:#F3F4F6;padding:8px 10px;text-align:left;font-size:12px;text-transform:uppercase;color:#6B7280}td{font-size:13px}@media print{body{padding:20px}}</style></head><body><div style="border-bottom:2px solid #1e3a5f;padding-bottom:12px;margin-bottom:16px"><h2 style="margin:0 0 2px;color:#1e3a5f">${hospitalName || "Lab Report"}</h2><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:#64748b">Laboratory Report</span>${nablLine}</div></div><p style="color:#6B7280;margin:0 0 8px">Order: LAB-${order.id.slice(0, 8).toUpperCase()} | Date: ${new Date(order.order_date).toLocaleDateString("en-IN")}</p><p><strong>Patient:</strong> ${p?.full_name || "—"} | <strong>UHID:</strong> ${p?.uhid || "—"} | <strong>Age/Gender:</strong> ${getAge(p?.dob || null)} ${p?.gender || ""}</p><table style="margin-top:16px"><thead><tr><th>Test</th><th>Result</th><th>Unit</th><th>Reference Range</th></tr></thead><tbody>${testRows}</tbody></table><p style="margin-top:24px;font-size:11px;color:#9CA3AF">Report generated on ${new Date().toLocaleString()}</p></body></html>`;
-          const w = window.open("", "_blank", "noopener,noreferrer");
-          if (w) { w.document.write(printHtml); w.document.close(); w.print(); }
+          const doctorName = (order.ordered_by_user as any)?.full_name || "";
+
+          // Group items by category for a structured report
+          const grouped: Record<string, TestItem[]> = {};
+          items.forEach(i => {
+            const cat = (i.category || "Other").toUpperCase();
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push(i);
+          });
+
+          const categoryRows = Object.entries(grouped).map(([cat, catItems]) => `
+            <tr style="background:#f8fafc">
+              <td colspan="4" style="font-weight:700;font-size:11px;text-transform:uppercase;color:#475569;padding:5px 10px;letter-spacing:.05em">${cat}</td>
+            </tr>
+            ${catItems.map(i => {
+              const flagStyle = i.result_flag === "H" || i.result_flag === "CH"
+                ? "color:#b45309;font-weight:700"
+                : i.result_flag === "L" || i.result_flag === "CL"
+                  ? "color:#1d4ed8;font-weight:700"
+                  : "";
+              const flagLabel = FLAG_STYLES[i.result_flag || ""]?.label || "";
+              const ref = i.normal_min != null && i.normal_max != null
+                ? `${i.normal_min} – ${i.normal_max}`
+                : i.normal_max != null ? `< ${i.normal_max}`
+                : i.normal_min != null ? `> ${i.normal_min}` : "—";
+              const rowBg = i.result_flag === "CH" || i.result_flag === "CL"
+                ? "background:#fff5f5"
+                : i.result_flag === "H" || i.result_flag === "L"
+                  ? "background:#fffbeb" : "";
+              return `<tr style="${rowBg}">
+                <td>${i.test_name}${i.test_code ? `<br/><span style="font-size:10px;color:#94a3b8">${i.test_code}</span>` : ""}</td>
+                <td style="${flagStyle}">${i.result_value || "—"}${flagLabel ? ` <span style="font-size:11px">${flagLabel}</span>` : ""}</td>
+                <td>${i.unit || "—"}</td>
+                <td style="color:#6b7280">${ref}</td>
+              </tr>`;
+            }).join("")}
+          `).join("");
+
+          const headerExtras = `
+            <div style="font-size:11px;color:#64748b;margin-top:4px">
+              Laboratory Investigation Report
+              ${nablNumber ? ` &nbsp;|&nbsp; NABL Accreditation No: <strong>${nablNumber}</strong>` : ""}
+            </div>`;
+
+          const body = `
+            ${printHeader(hospitalName || "Lab Report", undefined, headerExtras)}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin-bottom:16px;font-size:12px;padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
+              <div><span style="color:#64748b">Patient:</span> <strong>${p?.full_name || "—"}</strong></div>
+              <div><span style="color:#64748b">Order No:</span> LAB-${order.id.slice(0, 8).toUpperCase()}</div>
+              <div><span style="color:#64748b">UHID:</span> ${p?.uhid || "—"}</div>
+              <div><span style="color:#64748b">Date:</span> ${new Date(order.order_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</div>
+              <div><span style="color:#64748b">Age / Gender:</span> ${getAge(p?.dob || null)}${p?.gender ? ` / ${p.gender}` : ""}</div>
+              ${doctorName ? `<div><span style="color:#64748b">Ref. Doctor:</span> Dr. ${doctorName}</div>` : ""}
+            </div>
+            <table>
+              <thead><tr><th>Test</th><th>Result</th><th>Unit</th><th>Ref. Range</th></tr></thead>
+              <tbody>${categoryRows}</tbody>
+            </table>
+            <div style="margin-top:32px;display:flex;justify-content:flex-end">
+              <div style="text-align:center;min-width:140px">
+                <div style="border-top:1px solid #334155;padding-top:4px;font-size:11px;color:#475569">Lab Technician / Pathologist</div>
+              </div>
+            </div>
+          `;
+
+          printDocument(`Lab Report – ${p?.full_name || "Patient"}`, body);
         }}
           className="px-3 py-2 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-1.5">
           <Printer size={13} /> Print Report

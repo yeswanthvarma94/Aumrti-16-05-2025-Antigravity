@@ -7,13 +7,30 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// WARNING: Clinical data (PHI) is sent to ai.gateway.lovable.dev.
+// Ensure a Data Processing Agreement (DPA) covering PHI is in place with Lovable before production use.
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { visit_type, visit_id, hospital_id } = await req.json();
-    if (!visit_type || !visit_id || !hospital_id) {
-      return new Response(JSON.stringify({ error: "visit_type, visit_id, hospital_id required" }), {
+    // Auth verification
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const anonClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!);
+    const { data: { user }, error: authError } = await anonClient.auth.getUser(authHeader.replace("Bearer ", ""));
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { visit_type, visit_id } = await req.json();
+    if (!visit_type || !visit_id) {
+      return new Response(JSON.stringify({ error: "visit_type, visit_id required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -25,16 +42,29 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const sb = createClient(supabaseUrl, supabaseKey);
+    const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // Resolve hospital from authenticated user (never trust hospital_id from request body)
+    const { data: userData } = await sb
+      .from("users")
+      .select("hospital_id")
+      .eq("auth_user_id", user.id)
+      .maybeSingle();
+    if (!userData) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const hospital_id = userData.hospital_id;
 
     let clinicalText = "";
 
     if (visit_type === "opd") {
       const { data: enc } = await sb.from("opd_encounters")
         .select("chief_complaint, soap_notes, diagnosis, history_of_present_illness, soap_assessment, soap_plan, examination_notes")
-        .eq("id", visit_id).maybeSingle();
+        .eq("id", visit_id)
+        .eq("hospital_id", hospital_id)
+        .maybeSingle();
       if (!enc) {
         console.warn("ai-icd-suggest: opd_encounters not found for visit_id", visit_id);
       }
@@ -48,7 +78,9 @@ serve(async (req) => {
     } else if (visit_type === "ipd") {
       const { data: adm } = await sb.from("admissions")
         .select("admitting_diagnosis, discharge_type, status")
-        .eq("id", visit_id).maybeSingle();
+        .eq("id", visit_id)
+        .eq("hospital_id", hospital_id)
+        .maybeSingle();
       if (!adm) {
         console.warn("ai-icd-suggest: admissions not found for visit_id", visit_id);
       }
@@ -57,6 +89,7 @@ serve(async (req) => {
       const { data: rounds } = await sb.from("ward_round_notes")
         .select("subjective, objective, assessment, plan")
         .eq("admission_id", visit_id)
+        .eq("hospital_id", hospital_id)
         .order("created_at", { ascending: false })
         .limit(3);
 

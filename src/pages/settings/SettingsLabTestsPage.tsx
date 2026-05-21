@@ -7,12 +7,13 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Plus, Search, Pencil, Layers, X } from "lucide-react";
+import { Plus, Search, Pencil, Layers, X, Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { cn } from "@/lib/utils";
+import BulkLabTestImportModal from "@/components/settings/BulkLabTestImportModal";
 
 const CATEGORIES = ["Haematology", "Biochemistry", "Pathology", "Microbiology", "Serology", "Immunology"];
 
@@ -22,6 +23,7 @@ const SettingsLabTestsPage: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<"tests" | "groups">("tests");
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   // --- Test state ---
   const [search, setSearch] = useState("");
@@ -235,7 +237,7 @@ const SettingsLabTestsPage: React.FC = () => {
   });
 
   return (
-    <SettingsPageWrapper title="Lab Test Master" hideSave>
+    <SettingsPageWrapper title="Lab Test Master" hideSave wide>
       {/* Tabs */}
       <div className="flex gap-1 border-b border-border mb-4">
         {[
@@ -272,6 +274,7 @@ const SettingsLabTestsPage: React.FC = () => {
                 {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
+            <Button variant="outline" size="sm" onClick={() => setShowBulkImport(true)} className="gap-1"><Upload size={14} /> Bulk Import</Button>
             <Button size="sm" onClick={() => setShowAdd(true)} className="gap-1"><Plus size={14} /> Add Test</Button>
           </div>
 
@@ -409,6 +412,15 @@ const SettingsLabTestsPage: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Bulk Import Modal ── */}
+      {hospitalId && (
+        <BulkLabTestImportModal
+          open={showBulkImport}
+          onClose={() => setShowBulkImport(false)}
+          hospitalId={hospitalId}
+        />
+      )}
 
       {/* ── Add/Edit Group Dialog ── */}
       <Dialog open={showGroupDialog} onOpenChange={(open) => { if (!open) closeGroupDialog(); }}>

@@ -95,6 +95,7 @@ const settingsGroups: SettingsGroup[] = [
       { icon: BellIcon, title: "Alert Thresholds", desc: "Vitals and lab critical value alerts", route: "/settings/clinical-thresholds" },
       { icon: FileText, title: "ICD-10 Code Master", desc: "Manage diagnosis code sets for ICD coding", route: "/settings/icd-codes" },
       { icon: Settings2, title: "Radiology Modalities", desc: "Manage modality types and pricing", route: "/settings/radiology" },
+      { icon: ClipboardCheck, title: "Day Care Procedures", desc: "Configure approved day care procedure catalog", route: "/settings/day-care-procedures" },
     ],
   },
   {

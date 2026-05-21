@@ -44,6 +44,10 @@ interface Props {
   onStatusFilter: (f: string) => void;
   dateFilter: string;
   onDateFilter: (f: string) => void;
+  startDate: string;
+  endDate: string;
+  onStartDate: (d: string) => void;
+  onEndDate: (d: string) => void;
   onNewBill: () => void;
   onAdvanceReceipt: () => void;
   todayCollection: number;
@@ -54,6 +58,7 @@ interface Props {
 const BillQueue: React.FC<Props> = ({
   bills, loading, selectedBillId, onSelectBill,
   statusFilter, onStatusFilter, dateFilter, onDateFilter,
+  startDate, endDate, onStartDate, onEndDate,
   onNewBill, onAdvanceReceipt, todayCollection, pendingAmount, billCount,
 }) => (
   <aside className="w-80 flex-shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
@@ -91,19 +96,36 @@ const BillQueue: React.FC<Props> = ({
     </div>
 
     {/* Date filter */}
-    <div className="px-4 py-1.5 border-b border-border flex gap-2 flex-shrink-0">
-      {DATE_FILTERS.map((d) => (
-        <button
-          key={d.key}
-          onClick={() => onDateFilter(d.key)}
-          className={cn(
-            "text-[11px] font-medium transition-colors",
-            dateFilter === d.key ? "text-primary underline" : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          {d.label}
-        </button>
-      ))}
+    <div className="px-4 py-1.5 border-b border-border flex-shrink-0 space-y-1.5">
+      <div className="flex items-center gap-2">
+        {DATE_FILTERS.map((d) => (
+          <button
+            key={d.key}
+            onClick={() => onDateFilter(d.key)}
+            className={cn(
+              "text-[11px] font-medium transition-colors whitespace-nowrap",
+              dateFilter === d.key ? "text-primary underline" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {d.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="date"
+          value={startDate}
+          onChange={e => onStartDate(e.target.value)}
+          className="flex-1 text-[11px] border border-border rounded px-1.5 py-1 bg-card text-foreground focus:border-primary focus:outline-none"
+        />
+        <span className="text-[11px] text-muted-foreground shrink-0">to</span>
+        <input
+          type="date"
+          value={endDate}
+          onChange={e => onEndDate(e.target.value)}
+          className="flex-1 text-[11px] border border-border rounded px-1.5 py-1 bg-card text-foreground focus:border-primary focus:outline-none"
+        />
+      </div>
     </div>
 
     {/* Bill list */}
