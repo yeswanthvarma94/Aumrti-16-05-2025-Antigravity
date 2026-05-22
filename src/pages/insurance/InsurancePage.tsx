@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
-import { Building2, ClipboardList, Send, BarChart3, CalendarClock, Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal, TrendingUp, Bell } from "lucide-react";
+import { Building2, ClipboardList, Send, BarChart3, CalendarClock, Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal, TrendingUp, Bell, PieChart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ActiveAdmissions from "@/components/insurance/ActiveAdmissions";
 import PreAuthQueue from "@/components/insurance/PreAuthQueue";
@@ -18,25 +18,48 @@ import AutomationStatusPipeline from "@/components/insurance/AutomationStatusPip
 import InsuranceAutomationSettings from "@/components/insurance/InsuranceAutomationSettings";
 import EnhancementQueue from "@/components/insurance/EnhancementQueue";
 import IntimationsTab from "@/components/insurance/IntimationsTab";
+import ArogyasriTab from "@/components/insurance/ArogyasriTab";
+import DenialAnalyticsDashboard from "@/components/insurance/DenialAnalyticsDashboard";
 
 const ENHANCEMENT_ROLES = ["insurance_executive", "super_admin", "hospital_admin"];
 
-const navItems = [
-  { key: "admissions", label: "Active Admissions", icon: Building2, roles: null },
-  { key: "intimations", label: "Intimations", icon: Bell, roles: null },
-  { key: "preauth", label: "Pre-Auth Queue", icon: ClipboardList, roles: null },
-  { key: "submit", label: "Claims to Submit", icon: Send, roles: null },
-  { key: "status", label: "Claims Status", icon: BarChart3, roles: null },
-  { key: "ageing", label: "TPA Ageing", icon: CalendarClock, roles: null },
-  { key: "unified", label: "Unified View", icon: Layers, roles: null },
-  { key: "cghs_echs", label: "CGHS / ECHS", icon: ShieldCheck, roles: null },
-  { key: "esi", label: "ESI Scheme", icon: ShieldCheck, roles: null },
-  { key: "queries", label: "TPA Queries", icon: MessageSquare, roles: null },
-  { key: "config", label: "TPA Configuration", icon: Settings2, roles: null },
-  { key: "automation", label: "Automation", icon: Bot, roles: null },
-  { key: "auto_settings", label: "Auto Settings", icon: SlidersHorizontal, roles: null },
-  // Enhancement Queue: visible only to insurance_executive and admins
-  { key: "enhancement_queue", label: "Enhancement Queue", icon: TrendingUp, roles: ENHANCEMENT_ROLES },
+const navGroups = [
+  {
+    title: "Pre-Admission & Admission",
+    items: [
+      { key: "admissions", label: "Active Admissions", icon: Building2, roles: null },
+      { key: "intimations", label: "Intimations", icon: Bell, roles: null },
+      { key: "preauth", label: "Pre-Auth Queue", icon: ClipboardList, roles: null },
+      { key: "enhancement_queue", label: "Enhancement Queue", icon: TrendingUp, roles: ENHANCEMENT_ROLES },
+    ]
+  },
+  {
+    title: "Claim Processing",
+    items: [
+      { key: "submit", label: "Claims to Submit", icon: Send, roles: null },
+      { key: "status", label: "Claims Status", icon: BarChart3, roles: null },
+      { key: "queries", label: "TPA Queries", icon: MessageSquare, roles: null },
+      { key: "ageing", label: "TPA Ageing", icon: CalendarClock, roles: null },
+      { key: "unified", label: "Unified View", icon: Layers, roles: null },
+    ]
+  },
+  {
+    title: "Government Schemes",
+    items: [
+      { key: "cghs_echs", label: "CGHS / ECHS", icon: ShieldCheck, roles: null },
+      { key: "esi", label: "ESI Scheme", icon: ShieldCheck, roles: null },
+      { key: "arogyasri", label: "Arogyasri / State", icon: ShieldCheck, roles: null },
+    ]
+  },
+  {
+    title: "Operations & Analytics",
+    items: [
+      { key: "analytics", label: "Denial Analytics", icon: PieChart, roles: null },
+      { key: "automation", label: "Automation", icon: Bot, roles: null },
+      { key: "auto_settings", label: "Auto Settings", icon: SlidersHorizontal, roles: null },
+      { key: "config", label: "TPA Configuration", icon: Settings2, roles: null },
+    ]
+  }
 ];
 
 interface AdmissionContext {
@@ -172,11 +195,13 @@ const InsurancePage: React.FC = () => {
       case "unified": return <UnifiedAgeingView />;
       case "cghs_echs": return <CGHSECHSTab />;
       case "esi": return <ESISchemeTab />;
+      case "arogyasri": return <ArogyasriTab />;
       case "queries": return <TPAQueriesTab />;
       case "config": return <TPAConfiguration />;
       case "automation": return <AutomationStatusPipeline />;
       case "auto_settings": return <InsuranceAutomationSettings />;
       case "enhancement_queue": return <EnhancementQueue />;
+      case "analytics": return <DenialAnalyticsDashboard />;
       default: return null;
     }
   };
@@ -210,52 +235,64 @@ const InsurancePage: React.FC = () => {
           )}
         </div>
       </div>
-
       <div className="flex flex-1 overflow-hidden">
-        <nav className="w-[240px] bg-background border-r border-border flex-shrink-0 flex flex-col py-2">
-          {navItems
-            .filter((item) =>
-              item.roles === null ||
-              (userRole !== null && item.roles.includes(userRole))
-            )
-            .map((item) => {
-              const Icon = item.icon;
-              const isActive = activeNav === item.key;
-              const badge =
-                item.key === "enhancement_queue" && pendingEnhancements > 0 ? pendingEnhancements :
-                item.key === "intimations" && failedIntimations > 0 ? failedIntimations :
-                null;
-              return (
-                <button
-                  key={item.key}
-                  onClick={() => handleNavigate(item.key)}
-                  className={cn(
-                    "flex items-center gap-3 h-12 px-4 text-[13px] font-medium transition-colors text-left w-full",
-                    isActive
-                      ? "bg-primary/5 text-primary border-l-[3px] border-primary"
-                      : "text-muted-foreground hover:bg-muted/50 border-l-[3px] border-transparent"
-                  )}
-                >
-                  <Icon size={18} className="shrink-0" />
-                  <span className="flex-1">{item.label}</span>
-                  {badge !== null && (
-                    <span className={cn(
-                      "text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none",
-                      item.key === "intimations"
-                        ? "bg-red-100 text-red-700"
-                        : "bg-amber-100 text-amber-700"
-                    )}>
-                      {badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+        <nav className="w-[240px] bg-background border-r border-border flex-shrink-0 flex flex-col py-2 overflow-y-auto">
+          {navGroups.map((group, gIdx) => {
+            const filteredItems = group.items.filter((item) =>
+              item.roles === null || (userRole !== null && item.roles.includes(userRole))
+            );
+            
+            if (filteredItems.length === 0) return null;
+            
+            return (
+              <div key={gIdx} className="mb-4 last:mb-0">
+                <div className="px-4 mb-1">
+                  <h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    {group.title}
+                  </h3>
+                </div>
+                <div>
+                  {filteredItems.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeNav === item.key;
+                    const badge =
+                      item.key === "enhancement_queue" && pendingEnhancements > 0 ? pendingEnhancements :
+                      item.key === "intimations" && failedIntimations > 0 ? failedIntimations :
+                      null;
+                    return (
+                      <button
+                        key={item.key}
+                        onClick={() => handleNavigate(item.key)}
+                        className={cn(
+                          "flex items-center gap-3 h-10 px-4 text-[13px] font-medium transition-colors text-left w-full",
+                          isActive
+                            ? "bg-primary/5 text-primary border-l-[3px] border-primary"
+                            : "text-muted-foreground hover:bg-muted/50 border-l-[3px] border-transparent"
+                        )}
+                      >
+                        <Icon size={16} className="shrink-0" />
+                        <span className="flex-1">{item.label}</span>
+                        {badge !== null && (
+                          <span className={cn(
+                            "text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none",
+                            item.key === "intimations"
+                              ? "bg-red-100 text-red-700"
+                              : "bg-amber-100 text-amber-700"
+                          )}>
+                            {badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </nav>
-
-        <div className="flex-1 overflow-hidden bg-muted/30">
+        <main className="flex-1 bg-muted/20 overflow-hidden relative">
           {renderContent()}
-        </div>
+        </main>
       </div>
     </div>
   );

@@ -6,11 +6,13 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, X, Bot, Loader2, Library, Plus, DollarSign, AlertTriangle, CheckCircle2, Lock } from "lucide-react";
+import { Check, X, Bot, Loader2, Library, Plus, DollarSign, AlertTriangle, CheckCircle2, Lock, ClipboardList } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { callAI } from "@/lib/aiProvider";
 import { toast } from "sonner";
+import { useAIAudit } from "@/hooks/useAIAudit";
+import AIAuditLogDrawer from "@/components/ai/AIAuditLogDrawer";
 
 const statusColors: Record<string, string> = {
   pending: "bg-amber-100 text-amber-700",
@@ -36,6 +38,7 @@ interface Props {
 }
 
 const ICDCodingTab: React.FC<Props> = ({ hospitalId, onRefresh }) => {
+  const { logAudit } = useAIAudit();
   const [items, setItems] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [filter, setFilter] = useState("pending");
@@ -58,6 +61,9 @@ const ICDCodingTab: React.FC<Props> = ({ hospitalId, onRefresh }) => {
   const [lockJustification, setLockJustification] = useState("");
   const [locking, setLocking] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
+
+  // Audit log drawer
+  const [auditOpen, setAuditOpen] = useState(false);
 
   useEffect(() => { if (hospitalId) fetchItems(); }, [filter, hospitalId]);
 
@@ -100,6 +106,21 @@ const ICDCodingTab: React.FC<Props> = ({ hospitalId, onRefresh }) => {
       });
     } catch (e) {
       console.warn("Failed to log AI action:", e);
+    }
+    // Also log to governance audit trail
+    if (aiSuggestion) {
+      const auditAction = action === "accepted" ? "accepted" : reason ? "overridden" : "rejected";
+      await logAudit(
+        {
+          hospitalId,
+          featureKey: "icd_coding",
+          aiOutput: aiSuggestion as unknown as Record<string, unknown>,
+          confidence: aiSuggestion.confidence,
+          reasoning: aiSuggestion.reasoning,
+        },
+        auditAction,
+        reason ? { value: reason, original_code: code } : undefined
+      );
     }
   };
 
@@ -476,7 +497,17 @@ Return ONLY valid JSON (no markdown, no explanation):
           </div>
         ) : (
           <div className="space-y-4">
-            <h3 className="font-semibold text-sm">ICD Coding Workspace</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-sm">ICD Coding Workspace</h3>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs gap-1 text-muted-foreground"
+                onClick={() => setAuditOpen(true)}
+              >
+                <ClipboardList className="h-3.5 w-3.5" /> AI Audit Log
+              </Button>
+            </div>
 
             {/* AI Loading State */}
             {aiLoading && (
@@ -673,6 +704,12 @@ Return ONLY valid JSON (no markdown, no explanation):
           </div>
         )}
       </div>
+
+      <AIAuditLogDrawer
+        open={auditOpen}
+        onClose={() => setAuditOpen(false)}
+        hospitalId={hospitalId}
+      />
     </div>
   );
 };

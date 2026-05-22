@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Search, UserPlus, Eye, Users, EyeOff, Activity } from "lucide-react";
+import { Search, UserPlus, Eye, Users, EyeOff, Activity, LayoutDashboard } from "lucide-react";
 import PatientRegistrationModal from "@/components/patients/PatientRegistrationModal";
 import PatientDetailDrawer from "@/components/patients/PatientDetailDrawer";
 import PatientTimelineDrawer from "@/components/patients/PatientTimelineDrawer";
@@ -54,6 +54,7 @@ function getAge(dob: string | null): string {
 const PatientsPage: React.FC = () => {
   const { toast } = useToast();
   const { hospitalId, loading: hidLoading } = useHospitalId();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -226,6 +227,9 @@ const PatientsPage: React.FC = () => {
                       </Button>
                       <Button variant="ghost" size="icon" className="h-7 w-7" title="View Medical Timeline" onClick={(e) => { e.stopPropagation(); setTimelinePatient(p); }}>
                         <Activity size={14} className="text-primary" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" title="360° Patient View" onClick={(e) => { e.stopPropagation(); navigate(`/patients/${p.id}/summary`); }}>
+                        <LayoutDashboard size={14} className="text-teal-600" />
                       </Button>
                     </div>
                   </TableCell>

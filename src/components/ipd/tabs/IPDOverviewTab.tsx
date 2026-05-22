@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import DischargeInstructions from "@/components/ipd/DischargeInstructions";
 import DischargeSummaryGenerator from "@/components/ipd/DischargeSummaryGenerator";
+import DischargeSummaryAIPanel from "@/components/ipd/DischargeSummaryAIPanel";
 import DischargeTATTimer from "@/components/ipd/DischargeTATTimer";
 import SepsisWarningBanner from "@/components/ipd/SepsisWarningBanner";
 import { autoPullAdmissionCharges } from "@/lib/ipdBilling";
@@ -504,13 +505,19 @@ const IPDOverviewTab: React.FC<Props> = ({ admissionId, hospitalId, onTabChange,
                         <p className="text-[11px] text-destructive font-medium">⚠ Billing not cleared. Clear billing before discharge summary.</p>
                       </div>
                     ) : (
-                      <DischargeSummaryGenerator
-                        admissionId={admissionId}
-                        hospitalId={hospitalId}
-                        billingCleared={billingCleared || dischargeType === "lama"}
-                        dischargeType={dischargeType}
-                        onSummaryDone={() => setDischargeSummaryDone(true)}
-                      />
+                      <div className="space-y-3">
+                        <DischargeSummaryAIPanel
+                          admissionId={admissionId}
+                          hospitalId={hospitalId || ""}
+                        />
+                        <DischargeSummaryGenerator
+                          admissionId={admissionId}
+                          hospitalId={hospitalId}
+                          billingCleared={billingCleared || dischargeType === "lama"}
+                          dischargeType={dischargeType}
+                          onSummaryDone={() => setDischargeSummaryDone(true)}
+                        />
+                      </div>
                     )}
                   </>
                 );

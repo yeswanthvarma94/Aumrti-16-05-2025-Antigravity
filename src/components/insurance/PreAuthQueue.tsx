@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { differenceInDays, differenceInHours, isPast, addDays } from "date-fns";
 import { ClipboardList, Send, Sparkles, Loader2, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, Clock, MessageCircle, Search, Plus, X, Trash2 } from "lucide-react";
 import PmjaySection from "./PmjaySection";
+import PreAuthQualityGate, { type QualityGateInput } from "./PreAuthQualityGate";
 import { callAI } from "@/lib/aiProvider";
 import { formatINR } from "@/lib/currency";
 import PatientDocuments from "@/components/clinical/PatientDocuments";
@@ -102,6 +103,9 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
   const [aiLoading, setAiLoading] = useState(false);
   const [aiPreAuthLoading, setAiPreAuthLoading] = useState(false);
   const [approvalScore, setApprovalScore] = useState<{ score: number; risk: string; recommendation: string } | null>(null);
+
+  // Quality Gate modal state
+  const [qualityGateOpen, setQualityGateOpen] = useState(false);
 
   // Intimation section state
   const [intimationOpen, setIntimationOpen] = useState(true);
@@ -1015,7 +1019,7 @@ Write a 3-4 paragraph medical necessity justification suitable for Indian privat
               )}
 
               <div className="flex gap-2 pt-2">
-                <Button onClick={handleSubmit} className="gap-1.5">
+                <Button onClick={() => setQualityGateOpen(true)} className="gap-1.5">
                   <Send size={14} />
                   {isExtensionForm ? "Submit Extension" : formState.tpa_name?.toLowerCase().includes("pmjay") ? "Submit for PMJAY Pre-Auth" : "Submit Pre-Auth"}
                 </Button>
@@ -1024,6 +1028,34 @@ Write a 3-4 paragraph medical necessity justification suitable for Indian privat
                   <Button variant="ghost" onClick={() => { setIsNewForm(false); setIsExtensionForm(false); setFormState({}); }}>Cancel</Button>
                 )}
               </div>
+
+              {/* ── QUALITY GATE MODAL ── */}
+              <PreAuthQualityGate
+                open={qualityGateOpen}
+                onClose={() => setQualityGateOpen(false)}
+                input={{
+                  patientId: formState.patient_id || selected?.patient_id || "",
+                  admissionId: formState.admission_id || selected?.admission_id || null,
+                  tpaName: formState.tpa_name || "",
+                  policyNumber: formState.policy_number || "",
+                  diagnosisCodes: formState.diagnosis_codes || "",
+                  procedureCodes: formState.procedure_codes || "",
+                  estimatedAmount: formState.estimated_amount || "",
+                  notes: formState.notes || "",
+                  isAccidentCase,
+                  mlcNumber,
+                  firNumber,
+                  isExtension: isExtensionForm,
+                  extensionReason: formState.extension_reason || "",
+                  hospitalId: hospitalId || "",
+                  intimationSentAt: intimationSaved ? intimationTime : null,
+                  requiredDocuments: selectedTpaConfig?.required_documents || [],
+                }}
+                onProceed={() => {
+                  setQualityGateOpen(false);
+                  handleSubmit();
+                }}
+              />
             </div>
           </div>
         )}

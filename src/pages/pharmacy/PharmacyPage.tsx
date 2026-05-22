@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Pill, ShoppingCart, Package, ClipboardList, BarChart3, Bell, Plus, RotateCcw } from "lucide-react";
+import { Pill, ShoppingCart, Package, ClipboardList, BarChart3, Bell, Plus, RotateCcw, CalendarX2, PackageSearch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,11 @@ import StockAlertsDrawer from "@/components/pharmacy/StockAlertsDrawer";
 import ReceiveStockModal from "@/components/pharmacy/ReceiveStockModal";
 import PharmacyDispenseTab from "@/components/pharmacy/PharmacyDispenseTab";
 import PharmacyReturnsTab from "@/components/pharmacy/PharmacyReturnsTab";
+import ExpiryControlTab from "@/components/pharmacy/ExpiryControlTab";
+import ReorderDashboard from "@/components/pharmacy/ReorderDashboard";
 
 type PharmacyMode = "ip" | "retail";
-type PharmacyTab = "dispense" | "stock" | "ndps" | "reports" | "returns";
+type PharmacyTab = "dispense" | "stock" | "ndps" | "reports" | "returns" | "expiry" | "reorder";
 
 const PharmacyPage: React.FC = () => {
   const { toast } = useToast();
@@ -74,6 +76,8 @@ const PharmacyPage: React.FC = () => {
   const tabs = [
     { key: "dispense" as const, label: "Dispense", icon: Pill },
     { key: "stock" as const, label: "Stock", icon: Package },
+    { key: "expiry" as const, label: "Expiry Control", icon: CalendarX2 },
+    { key: "reorder" as const, label: "Reorder", icon: PackageSearch },
     { key: "returns" as const, label: "Returns", icon: RotateCcw },
     { key: "ndps" as const, label: "NDPS Register", icon: ClipboardList },
     { key: "reports" as const, label: "Reports", icon: BarChart3 },
@@ -177,6 +181,12 @@ const PharmacyPage: React.FC = () => {
           <div className="overflow-y-auto h-full">
             <PharmacyReturnsTab hospitalId={hospitalId} />
           </div>
+        )}
+        {activeTab === "expiry" && hospitalId && (
+          <ExpiryControlTab hospitalId={hospitalId} />
+        )}
+        {activeTab === "reorder" && hospitalId && (
+          <ReorderDashboard hospitalId={hospitalId} />
         )}
         {activeTab === "reports" && hospitalId && (
           <PharmacyReportsTab hospitalId={hospitalId} />

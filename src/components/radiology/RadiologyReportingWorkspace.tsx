@@ -13,6 +13,7 @@ import {
   Sparkles, ExternalLink, X, AlertTriangle,
 } from "lucide-react";
 import type { RadiologyOrder } from "@/pages/radiology/RadiologyPage";
+import { useAIAudit } from "@/hooks/useAIAudit";
 
 interface Report {
   id: string;
@@ -91,6 +92,7 @@ function getAge(dob: string | null): string {
 
 const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onStatusChange }) => {
   const { toast } = useToast();
+  const { logAudit } = useAIAudit();
   const [report, setReport] = useState<Report | null>(null);
   const [pcpndt, setPcpndt] = useState<PcpndtForm | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -124,6 +126,8 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
   // AI state
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
+  const [aiConfidence, setAiConfidence] = useState<number | null>(null);
+  const [aiReasoning, setAiReasoning] = useState<string | null>(null);
   const [aiFlagType, setAiFlagType] = useState<"critical" | "abnormal" | "normal">("abnormal");
 
   // Voice state
@@ -358,6 +362,8 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
       if (error) throw error;
       const text = data?.impression || "Unable to generate impression.";
       setAiSuggestion(text);
+      setAiConfidence(typeof data?.confidence === "number" ? data.confidence : null);
+      setAiReasoning(typeof data?.reasoning === "string" ? data.reasoning : null);
       if (report) {
         await supabase.from("radiology_reports").update({ ai_impression_suggestion: text }).eq("id", report.id);
       }
@@ -371,13 +377,45 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
   const useAiImpression = () => {
     if (aiSuggestion) {
       setImpression(aiSuggestion);
+      logAudit(
+        {
+          hospitalId,
+          patientId: order.patient_id,
+          featureKey: "radiology_impression",
+          aiOutput: { impression: aiSuggestion, modality: order.modality_type, study: order.study_name },
+          confidence: aiConfidence ?? undefined,
+          reasoning: aiReasoning ?? undefined,
+        },
+        "accepted"
+      );
       setAiSuggestion(null);
+      setAiConfidence(null);
+      setAiReasoning(null);
       if (report) {
         supabase.from("radiology_reports").update({ is_ai_used: true }).eq("id", report.id);
       }
       supabase.from("radiology_orders").update({ ai_flag: aiFlagType } as any).eq("id", order.id);
       onStatusChange();
     }
+  };
+
+  const dismissAiImpression = () => {
+    if (aiSuggestion) {
+      logAudit(
+        {
+          hospitalId,
+          patientId: order.patient_id,
+          featureKey: "radiology_impression",
+          aiOutput: { impression: aiSuggestion, modality: order.modality_type, study: order.study_name },
+          confidence: aiConfidence ?? undefined,
+          reasoning: aiReasoning ?? undefined,
+        },
+        "rejected"
+      );
+    }
+    setAiSuggestion(null);
+    setAiConfidence(null);
+    setAiReasoning(null);
   };
 
   const handleVoiceInput = () => {
@@ -630,7 +668,22 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
               {/* AI Suggestion */}
               {aiSuggestion && !isSigned && (
                 <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                  <p className="text-[11px] font-bold text-emerald-700 mb-1">🤖 AI Suggestion:</p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-[11px] font-bold text-emerald-700">🤖 AI Suggestion</p>
+                    {aiConfidence != null && (
+                      <span className={cn(
+                        "text-[10px] px-1.5 py-0.5 rounded font-medium",
+                        aiConfidence >= 0.8 ? "bg-emerald-100 text-emerald-700" :
+                        aiConfidence >= 0.6 ? "bg-amber-100 text-amber-700" :
+                        "bg-red-100 text-red-700"
+                      )}>
+                        {Math.round(aiConfidence * 100)}% confidence
+                      </span>
+                    )}
+                  </div>
+                  {aiReasoning && (
+                    <p className="text-[10px] italic text-muted-foreground mb-1">{aiReasoning}</p>
+                  )}
                   <p className="text-[13px] text-foreground whitespace-pre-wrap">{aiSuggestion}</p>
                   <div className="flex items-center gap-2 mt-2">
                     <span className="text-[10px] text-muted-foreground">Flag:</span>
@@ -655,7 +708,7 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
                     <Button size="sm" className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700" onClick={useAiImpression}>
                       <Check size={12} /> Use This
                     </Button>
-                    <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setAiSuggestion(null)}>
+                    <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={dismissAiImpression}>
                       <X size={12} /> Dismiss
                     </Button>
                   </div>

@@ -4,6 +4,7 @@ import { X, Check, Copy, RefreshCw, Loader2, AlertTriangle, Globe } from "lucide
 import { useVoiceScribe, SUPPORTED_LANGUAGES } from "@/contexts/VoiceScribeContext";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useAIAudit } from "@/hooks/useAIAudit";
 
 interface DrugItem {
   drug_name: string;
@@ -22,10 +23,20 @@ const VoiceScribePanel: React.FC = () => {
     selectedLanguage,
   } = useVoiceScribe();
   const { toast } = useToast();
+  const { logAudit } = useAIAudit();
 
   // Editable local state from structured output
   const [editableData, setEditableData] = useState<Record<string, unknown>>({});
   const [retrying, setRetrying] = useState(false);
+  const [hospitalId, setHospitalId] = useState<string>("");
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      (supabase as any).from("users").select("hospital_id").eq("auth_user_id", user.id).maybeSingle()
+        .then(({ data }: any) => { if (data?.hospital_id) setHospitalId(data.hospital_id); });
+    });
+  }, []);
 
   useEffect(() => {
     if (structuredOutput) {
@@ -71,6 +82,18 @@ const VoiceScribePanel: React.FC = () => {
 
   const handleApply = () => {
     applyToCurrentScreen();
+    if (hospitalId && structuredOutput) {
+      logAudit(
+        {
+          hospitalId,
+          featureKey: `voice_scribe_${currentSessionType}`,
+          aiOutput: structuredOutput,
+          confidence: typeof structuredOutput.confidence === "number" ? structuredOutput.confidence : undefined,
+          reasoning: typeof structuredOutput.reasoning === "string" ? structuredOutput.reasoning : undefined,
+        },
+        "accepted"
+      );
+    }
     toast({ title: "✓ Notes applied to consultation" });
     setTimeout(() => {
       setIsPanelOpen(false);
@@ -139,6 +162,17 @@ Handover: ${editableData.handover_note || ""}`;
   };
 
   const handleReRecord = () => {
+    if (hospitalId && structuredOutput) {
+      logAudit(
+        {
+          hospitalId,
+          featureKey: `voice_scribe_${currentSessionType}`,
+          aiOutput: structuredOutput,
+          confidence: typeof structuredOutput.confidence === "number" ? structuredOutput.confidence : undefined,
+        },
+        "rejected"
+      );
+    }
     resetSession();
     setIsPanelOpen(false);
   };

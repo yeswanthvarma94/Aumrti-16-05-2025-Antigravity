@@ -49,7 +49,14 @@ Indication: ${indication || "Not provided"}
 Findings written by radiologist:
 ${findings}
 
-Based on these findings, write a concise, professional radiology impression/conclusion in 2-4 lines as would appear in a formal radiology report. Start directly with the impression. Do not include any preamble. Use standard radiology terminology. If findings describe something normal, say so clearly. If abnormal findings are present, summarise them clinically.`;
+Based on these findings, return ONLY a JSON object (no markdown, no preamble):
+{
+  "impression": "2-4 line professional radiology impression as would appear in a formal report. Start directly with the impression.",
+  "confidence": 0.85,
+  "reasoning": "One sentence explaining the key finding driving this impression."
+}
+
+confidence should be 0-1 based on how clearly the findings support the impression. Use standard radiology terminology.`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -60,7 +67,7 @@ Based on these findings, write a concise, professional radiology impression/conc
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
         messages: [
-          { role: "system", content: "You are an expert radiologist. Provide concise, professional radiology impressions." },
+          { role: "system", content: "You are an expert radiologist. Return only valid JSON with impression, confidence, and reasoning fields." },
           { role: "user", content: prompt },
         ],
       }),
@@ -85,9 +92,22 @@ Based on these findings, write a concise, professional radiology impression/conc
     }
 
     const data = await response.json();
-    const impression = data.choices?.[0]?.message?.content || "Unable to generate impression.";
+    const rawContent = data.choices?.[0]?.message?.content || "{}";
+    const cleaned = rawContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
 
-    return new Response(JSON.stringify({ impression }), {
+    let parsed: { impression: string; confidence: number; reasoning: string };
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      // Fallback: treat the entire content as plain impression text
+      parsed = { impression: rawContent.trim(), confidence: 0.7, reasoning: "" };
+    }
+
+    return new Response(JSON.stringify({
+      impression: parsed.impression || "Unable to generate impression.",
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.7,
+      reasoning: parsed.reasoning || "",
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {

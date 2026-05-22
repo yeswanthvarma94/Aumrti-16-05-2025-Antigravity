@@ -4,6 +4,8 @@ import type { PortalSession } from "./PortalLogin";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import { sendAppointmentConfirmation } from "@/lib/whatsapp-notifications";
+import VoiceInputButton from "@/components/portal/VoiceInputButton";
+import LanguageSelector from "@/components/portal/LanguageSelector";
 
 const DEPT_ICONS: Record<string, string> = {
   "general medicine": "🏥", medicine: "🏥",
@@ -86,6 +88,7 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [voiceLang, setVoiceLang] = useState("en");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -340,14 +343,30 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
             <Row label="Patient" value={session.fullName} />
           </div>
 
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Any specific concern? (optional)"
-            rows={2}
-            className="w-full mt-3 rounded-lg p-3 text-sm resize-none"
-            style={{ border: "1.5px solid #E2E8F0", outline: "none" }}
-          />
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs text-gray-500">Any specific concern? (optional)</span>
+              <div className="flex items-center gap-2">
+                <LanguageSelector value={voiceLang} onChange={setVoiceLang} compact />
+                <VoiceInputButton
+                  languageCode={voiceLang}
+                  onTranscript={t => setNotes(prev => prev ? prev + " " + t : t)}
+                  patientId={session.patientId}
+                  hospitalId={session.hospitalId}
+                  sessionType="appointment_booking"
+                  size="sm"
+                />
+              </div>
+            </div>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Speak or type your concern..."
+              rows={2}
+              className="w-full rounded-lg p-3 text-sm resize-none"
+              style={{ border: "1.5px solid #E2E8F0", outline: "none" }}
+            />
+          </div>
 
           <button
             onClick={handleConfirm}

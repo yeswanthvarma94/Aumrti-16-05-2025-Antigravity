@@ -105,6 +105,9 @@ const MortuaryPage = lazy(() => import("./pages/mortuary/MortuaryPage"));
 const VaccinationPage = lazy(() => import("./pages/vaccination/VaccinationPage"));
 const DentalPage = lazy(() => import("./pages/dental/DentalPage"));
 const AyushPage = lazy(() => import("./pages/ayush/AyushPage"));
+const MentalHealthPage = lazy(() => import("./pages/mental-health/MentalHealthPage"));
+const ChronicDiseasePage = lazy(() => import("./pages/chronic-disease/ChronicDiseasePage"));
+const PatientSummaryPage = lazy(() => import("./pages/patients/PatientSummaryPage"));
 const PackagesPage = lazy(() => import("./pages/packages/PackagesPage"));
 const IVFPage = lazy(() => import("./pages/ivf/IVFPage"));
 const SettingsRadiologyPage = lazy(() => import("./pages/settings/SettingsRadiologyPage"));
@@ -185,6 +188,7 @@ const App = () => (
             <Route path="/dashboard" element={<RG path="/dashboard"><SM name="Dashboard"><Dashboard /></SM></RG>} />
             <Route path="/modules" element={<RG path="/modules"><SM name="Modules"><ModulesPage /></SM></RG>} />
             <Route path="/patients" element={<RG path="/patients"><SM name="Patients"><PatientsPage /></SM></RG>} />
+            <Route path="/patients/:id/summary" element={<RG path="/patients"><SM name="Patient 360° View"><PatientSummaryPage /></SM></RG>} />
             <Route path="/opd" element={<RG path="/opd"><SM name="OPD"><OPDPage /></SM></RG>} />
             <Route path="/schedule" element={<RG path="/schedule"><SM name="Scheduling"><SchedulingPage /></SM></RG>} />
             <Route path="/ipd" element={<RG path="/ipd"><SM name="IPD"><IPDPage /></SM></RG>} />
@@ -267,6 +271,8 @@ const App = () => (
             <Route path="/mortuary" element={<RG path="/mortuary"><SM name="Mortuary"><MortuaryPage /></SM></RG>} />
             <Route path="/vaccination" element={<RG path="/vaccination"><SM name="Vaccination"><VaccinationPage /></SM></RG>} />
             <Route path="/dental" element={<RG path="/dental"><SM name="Dental"><DentalPage /></SM></RG>} />
+            <Route path="/mental-health" element={<RG path="/mental-health"><SM name="Mental Health"><MentalHealthPage /></SM></RG>} />
+            <Route path="/chronic-disease" element={<RG path="/chronic-disease"><SM name="Chronic Disease Management"><ChronicDiseasePage /></SM></RG>} />
             <Route path="/ayush" element={<RG path="/ayush"><SM name="AYUSH"><AyushPage /></SM></RG>} />
             <Route path="/packages" element={<RG path="/packages"><SM name="Health Packages"><PackagesPage /></SM></RG>} />
             <Route path="/ivf" element={<RG path="/ivf"><SM name="IVF"><IVFPage /></SM></RG>} />

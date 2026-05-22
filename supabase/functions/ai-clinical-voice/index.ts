@@ -29,7 +29,8 @@ Return ONLY a JSON object with this exact structure:
   ],
   "follow_up": "follow-up instructions",
   "investigations": ["test 1", "test 2"],
-  "confidence": 0.85
+  "confidence": 0.85,
+  "reasoning": "One sentence explaining the confidence level and key structuring decisions made"
 }
 
 If a field cannot be extracted, use empty string or empty array.
@@ -50,7 +51,8 @@ Return ONLY a JSON object:
   "investigations_ordered": ["test 1", "test 2"],
   "consultant_to_call": "",
   "discharge_plan": "if discharge being planned",
-  "confidence": 0.85
+  "confidence": 0.85,
+  "reasoning": "One sentence explaining the confidence level and key structuring decisions"
 }`,
 
   emergency: `You are a clinical documentation AI. This is an emergency department case.
