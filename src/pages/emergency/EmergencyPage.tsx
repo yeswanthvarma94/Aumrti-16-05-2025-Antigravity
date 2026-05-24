@@ -5,6 +5,7 @@ import EmergencyHeader from "@/components/emergency/EmergencyHeader";
 import TriageBoard from "@/components/emergency/TriageBoard";
 import EmergencyWorkspace from "@/components/emergency/EmergencyWorkspace";
 import EmergencyRegistrationModal from "@/components/emergency/EmergencyRegistrationModal";
+import MLCDetailsModal from "@/components/emergency/MLCDetailsModal";
 import EpidemicModeBanner from "@/components/emergency/EpidemicModeBanner";
 import { getActiveEpidemicProtocol } from "@/lib/disaster-mode";
 
@@ -35,6 +36,7 @@ const EmergencyPage: React.FC = () => {
   const [showRegModal, setShowRegModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [epidemicProtocol, setEpidemicProtocol] = useState<any>(null);
+  const [mlcModal, setMlcModal] = useState<{ edVisitId: string; patientId: string; patientName: string } | null>(null);
 
   const fetchData = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -151,7 +153,21 @@ const EmergencyPage: React.FC = () => {
         onClose={() => setShowRegModal(false)}
         hospitalId={hospitalId}
         onRegistered={fetchData}
+        onMlcRequired={(edVisitId, patientId, patientName) =>
+          setMlcModal({ edVisitId, patientId, patientName })
+        }
       />
+
+      {mlcModal && hospitalId && (
+        <MLCDetailsModal
+          hospitalId={hospitalId}
+          patientId={mlcModal.patientId}
+          patientName={mlcModal.patientName}
+          edVisitId={mlcModal.edVisitId}
+          onClose={() => setMlcModal(null)}
+          onSaved={() => { setMlcModal(null); fetchData(); }}
+        />
+      )}
     </div>
   );
 };

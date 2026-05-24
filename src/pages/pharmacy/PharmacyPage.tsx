@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Pill, ShoppingCart, Package, ClipboardList, BarChart3, Bell, Plus, RotateCcw, CalendarX2, PackageSearch } from "lucide-react";
+import { Pill, ShoppingCart, Package, ClipboardList, BarChart3, Bell, Plus, RotateCcw, CalendarX2, PackageSearch, ArrowRightLeft, Store } from "lucide-react";
+import NABHBadge from "@/components/nabh/NABHBadge";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,13 @@ import PharmacyDispenseTab from "@/components/pharmacy/PharmacyDispenseTab";
 import PharmacyReturnsTab from "@/components/pharmacy/PharmacyReturnsTab";
 import ExpiryControlTab from "@/components/pharmacy/ExpiryControlTab";
 import ReorderDashboard from "@/components/pharmacy/ReorderDashboard";
+import StoreTransferModal from "@/components/pharmacy/StoreTransferModal";
+
+interface StoreLocation {
+  id: string;
+  name: string;
+  type: string;
+}
 
 type PharmacyMode = "ip" | "retail";
 type PharmacyTab = "dispense" | "stock" | "ndps" | "reports" | "returns" | "expiry" | "reorder";
@@ -32,6 +40,9 @@ const PharmacyPage: React.FC = () => {
   const [alertCount, setAlertCount] = useState(0);
   const [showAlerts, setShowAlerts] = useState(false);
   const [showReceiveStock, setShowReceiveStock] = useState(false);
+  const [storeId, setStoreId] = useState<string | null>(null);
+  const [stores, setStores] = useState<StoreLocation[]>([]);
+  const [showTransfer, setShowTransfer] = useState(false);
 
   const fetchHospitalId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -55,8 +66,19 @@ const PharmacyPage: React.FC = () => {
     setAlertCount(count || 0);
   }, [hospitalId]);
 
+  const fetchStores = useCallback(async () => {
+    if (!hospitalId) return;
+    const { data } = await (supabase as any)
+      .from("store_locations")
+      .select("id, name, type")
+      .eq("hospital_id", hospitalId)
+      .eq("is_active", true)
+      .order("name");
+    setStores(data || []);
+  }, [hospitalId]);
+
   useEffect(() => { fetchHospitalId(); }, [fetchHospitalId]);
-  useEffect(() => { if (hospitalId) fetchAlertCount(); }, [hospitalId, fetchAlertCount]);
+  useEffect(() => { if (hospitalId) { fetchAlertCount(); fetchStores(); } }, [hospitalId, fetchAlertCount, fetchStores]);
 
   const handleModeChange = (m: PharmacyMode) => {
     setMode(m);
@@ -123,6 +145,28 @@ const PharmacyPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Store selector */}
+          <div className="flex items-center gap-1.5">
+            <Store size={14} className="text-muted-foreground" />
+            <select
+              value={storeId || ""}
+              onChange={e => setStoreId(e.target.value || null)}
+              className="h-8 text-xs border border-input rounded px-2 bg-background min-w-[150px]"
+            >
+              <option value="">Central Pharmacy</option>
+              {stores.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs gap-1"
+            onClick={() => setShowTransfer(true)}
+          >
+            <ArrowRightLeft size={13} /> Transfer
+          </Button>
           {alertCount > 0 && (
             <button
               onClick={() => setShowAlerts(true)}
@@ -141,6 +185,7 @@ const PharmacyPage: React.FC = () => {
             <Plus size={14} className="mr-1" /> Receive Stock
           </Button>
           <span className="text-xs text-muted-foreground">{today}</span>
+          <NABHBadge standardCodes={["MOM.1", "MOM.2", "MOM.3", "MOM.4"]} />
         </div>
       </div>
 
@@ -179,7 +224,7 @@ const PharmacyPage: React.FC = () => {
         )}
         {activeTab === "returns" && hospitalId && (
           <div className="overflow-y-auto h-full">
-            <PharmacyReturnsTab hospitalId={hospitalId} />
+            <PharmacyReturnsTab hospitalId={hospitalId} storeId={storeId} />
           </div>
         )}
         {activeTab === "expiry" && hospitalId && (
@@ -205,6 +250,14 @@ const PharmacyPage: React.FC = () => {
           hospitalId={hospitalId}
           onClose={() => setShowReceiveStock(false)}
           onSaved={() => { setShowReceiveStock(false); fetchAlertCount(); toast({ title: "Stock received successfully" }); }}
+        />
+      )}
+      {showTransfer && hospitalId && (
+        <StoreTransferModal
+          hospitalId={hospitalId}
+          currentStoreId={storeId}
+          onClose={() => setShowTransfer(false)}
+          onTransferred={() => { setShowTransfer(false); toast({ title: "Stock transferred successfully" }); }}
         />
       )}
     </div>

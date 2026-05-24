@@ -18,6 +18,32 @@ ROUTE_ROLES['/billing/closure'] = ['accountant', 'billing_executive', 'cfo', 'su
 ROUTE_ROLES['/insurance'] = ['billing_executive', 'insurance_executive', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/lab'] = ['lab_technician', 'lab_tech', 'doctor', 'super_admin', 'hospital_admin'];
 ROUTE_ROLES['/radiology'] = ['radiologist', 'doctor', 'super_admin', 'hospital_admin'];
+ROUTE_ROLES['/nabh/compliance'] = ['super_admin', 'hospital_admin', 'quality_officer', 'quality_manager'];
+ROUTE_ROLES['/quality/events'] = [
+  'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
+  'doctor', 'nurse', 'receptionist', 'nursing_supervisor',
+];
+ROUTE_ROLES['/ipc/dashboard'] = [
+  'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
+  'doctor', 'nurse', 'nursing_supervisor',
+];
+ROUTE_ROLES['/quality/clinical-audits'] = [
+  'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
+  'doctor', 'nursing_supervisor',
+];
+ROUTE_ROLES['/quality/qi-projects'] = [
+  'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
+  'doctor', 'nursing_supervisor',
+];
+ROUTE_ROLES['/quality/committees'] = [
+  'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
+  'doctor', 'nursing_supervisor',
+];
+ROUTE_ROLES['/fms/dashboard'] = [
+  'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
+];
+ROUTE_ROLES['/settings/record-retention'] = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/settings/change-log'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/admin/go-live'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/design-system'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/admin/data-migration'] = ['super_admin', 'hospital_admin'];
@@ -65,6 +91,13 @@ export const ROUTE_TO_MODULE: Record<string, string> = {
   "/hr": "hr",
   "/inventory": "inventory",
   "/quality": "quality",
+  "/nabh/compliance": "quality",
+  "/quality/events": "quality",
+  "/ipc/dashboard": "quality",
+  "/quality/clinical-audits": "quality",
+  "/quality/qi-projects": "quality",
+  "/quality/committees": "quality",
+  "/fms/dashboard": "quality",
   "/analytics": "analytics",
   "/patients": "patients",
   "/settings": "settings",

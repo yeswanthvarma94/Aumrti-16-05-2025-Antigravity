@@ -21,6 +21,8 @@ import AnaesthesiaSheet from "@/components/specialty/AnaesthesiaSheet";
 import OphthalmologySheet from "@/components/specialty/OphthalmologySheet";
 import { sendWhatsApp } from "@/lib/whatsapp-send";
 import { printDocument, printHeader } from "@/lib/printUtils";
+import { logRecordAccess } from "@/lib/ims";
+import { translateText, getHospitalLanguages, ALL_PATIENT_LANGUAGES, buildBilingualHtml } from "@/lib/translateUtils";
 
 interface Props {
   token: OpdToken | null;
@@ -115,6 +117,12 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
   const [showReferralModal, setShowReferralModal] = useState(false);
   const [hospitalInfo, setHospitalInfo] = useState<any>(null);
 
+  // Translated advice for bilingual print
+  const [printLang, setPrintLang]           = useState("English");
+  const [translatedAdvice, setTranslatedAdvice] = useState("");
+  const [translatingAdvice, setTranslatingAdvice] = useState(false);
+  const [availablePrintLangs, setAvailablePrintLangs] = useState<string[]>(["English"]);
+
   // Warn on browser close/refresh when dirty
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -133,6 +141,12 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
     if (!hospitalId) return;
     supabase.from("hospitals").select("name, address, phone, email, website, logo_url").eq("id", hospitalId).maybeSingle()
       .then(({ data }) => setHospitalInfo(data));
+  }, [hospitalId]);
+
+  // Load hospital's preferred patient languages for print
+  useEffect(() => {
+    if (!hospitalId) return;
+    getHospitalLanguages(hospitalId).then((langs) => setAvailablePrintLangs(langs));
   }, [hospitalId]);
 
   // Load radiology study names for voice-scribe classification
@@ -434,6 +448,7 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
       toast({ title: "Hospital details not found", variant: "destructive" });
       return;
     }
+    logRecordAccess({ hospitalId, recordType: "OPD_Record", recordId: token.id, patientId: token.patient_id, action: "print" });
 
     const drugsHtml = prescription.drugs.length > 0 
       ? `<table>
@@ -492,7 +507,11 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
 
       ${investigationsHtml}
 
-      ${prescription.advice_notes ? `<div class="section-title">Advice & Instructions</div><div style="white-space:pre-wrap;background:#f8fafc;padding:10px;border-radius:4px;border:1px solid #e2e8f0;">${prescription.advice_notes}</div>` : ""}
+      ${prescription.advice_notes
+          ? translatedAdvice && printLang !== "English"
+            ? buildBilingualHtml(prescription.advice_notes, translatedAdvice, printLang, ALL_PATIENT_LANGUAGES.find(l => l.code === printLang)?.native || printLang)
+            : `<div class="section-title">Advice & Instructions</div><div style="white-space:pre-wrap;background:#f8fafc;padding:10px;border-radius:4px;border:1px solid #e2e8f0;">${prescription.advice_notes}</div>`
+          : ""}
 
       ${encounter.follow_up_date ? `<div style="margin-top:20px;padding:10px;border:1px dashed #1A2F5A;border-radius:4px;background:#f0f7ff;">
         <b style="color:#1A2F5A">Follow-up Date:</b> ${new Date(encounter.follow_up_date).toLocaleDateString("en-IN")}
@@ -858,7 +877,7 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
       <div className="flex-1 overflow-hidden">
         {activeTab === 0 && <ComplaintTab encounter={encounter} onChange={updateEncounter} />}
         {activeTab === 1 && <VitalsTab encounter={encounter} onChange={updateEncounter} />}
-        {activeTab === 2 && <ExaminationTab encounter={encounter} onChange={updateEncounter} />}
+        {activeTab === 2 && <ExaminationTab encounter={encounter} onChange={updateEncounter} encounterId={encounterId} hospitalId={hospitalId} patientId={token?.patient_id ?? null} userId={userId} />}
         {activeTab === 3 && <RxOrdersTab prescription={prescription} onChange={updatePrescription} hospitalId={hospitalId} patientAllergies={token?.patient?.allergies ? token.patient.allergies.split(",").map(a => a.trim()) : []} diagnosis={encounter.diagnosis} icdCode={encounter.icd10_code} patientAge={patientAge || undefined} patientGender={token?.patient?.gender || undefined} />}
         {activeTab === 4 && <HistoryTab token={token} encounterId={encounterId} />}
         {activeTab === 5 && specialty === 'obstetric' && hospitalId && (
@@ -925,8 +944,49 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
         <button onClick={handleSendWhatsApp} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
           <Smartphone className="h-3.5 w-3.5" /> Send Rx
         </button>
-        <button onClick={handlePrintPrescription} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md hover:bg-slate-900 flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <Printer className="h-3.5 w-3.5" /> Print Rx
+        {/* Language selector for bilingual prescription print */}
+        {availablePrintLangs.length > 1 && (
+          <select
+            value={printLang}
+            onChange={async (e) => {
+              const lang = e.target.value;
+              setPrintLang(lang);
+              setTranslatedAdvice("");
+              if (lang !== "English" && prescription.advice_notes?.trim()) {
+                setTranslatingAdvice(true);
+                try {
+                  const translated = await translateText(prescription.advice_notes, lang, hospitalId ?? "", {
+                    context: "patient_prescription_advice",
+                    patientId: token?.patient_id ?? undefined,
+                  });
+                  setTranslatedAdvice(translated);
+                } catch {
+                  toast({ title: "Translation failed", variant: "destructive" });
+                } finally {
+                  setTranslatingAdvice(false);
+                }
+              }
+            }}
+            className="text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white text-slate-700 h-[30px] focus:outline-none focus:ring-1 focus:ring-slate-400"
+            title="Print prescription advice in this language"
+          >
+            {availablePrintLangs.map((lang) => {
+              const meta = ALL_PATIENT_LANGUAGES.find((l) => l.code === lang);
+              return (
+                <option key={lang} value={lang}>
+                  {meta?.native !== meta?.label ? `${meta?.native} ${lang}` : lang}
+                </option>
+              );
+            })}
+          </select>
+        )}
+        <button
+          onClick={handlePrintPrescription}
+          disabled={translatingAdvice}
+          className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md hover:bg-slate-900 flex items-center gap-1.5 active:scale-[0.97] transition-all disabled:opacity-50"
+        >
+          <Printer className="h-3.5 w-3.5" />
+          {translatingAdvice ? "Translating…" : printLang !== "English" && translatedAdvice ? `Print (EN + ${printLang})` : "Print Rx"}
         </button>
       </div>
       {showAdmitModal && token && hospitalId && (

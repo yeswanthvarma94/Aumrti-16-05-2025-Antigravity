@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Plus, Clock, ChevronDown, ChevronUp, ScanLine } from "lucide-react";
+import { Plus, Clock, ChevronDown, ChevronUp, ScanLine, BookOpen } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import EmptyState from "@/components/EmptyState";
 import type { RadiologyOrder, Modality } from "@/pages/radiology/RadiologyPage";
 
@@ -91,6 +92,7 @@ const RadiologyWorklist: React.FC<Props> = ({
   filterModality, onFilterChange, selectedDate, onDateChange,
   statCounts, onNewOrder, pendingOpdOrders = [], onCreateFromOpd,
 }) => {
+  const navigate = useNavigate();
   const [opdExpanded, setOpdExpanded] = useState(true);
   const [filterStatus, setFilterStatus] = useState("all");
   const today = new Date().toISOString().split("T")[0];
@@ -102,13 +104,25 @@ const RadiologyWorklist: React.FC<Props> = ({
       {/* Header */}
       <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border">
         <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
           <h2 className="text-sm font-bold text-foreground">Radiology Worklist</h2>
-          <button
-            onClick={onNewOrder}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[hsl(220,55%,23%)] text-white text-[11px] font-semibold hover:bg-[hsl(220,55%,30%)] active:scale-[0.97] transition-all"
-          >
-            <Plus size={12} /> New Study
-          </button>
+          <NABHBadge standardCodes={["AAC.3", "COP.8", "QPS.2"]} />
+        </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => navigate("/radiology/pcpndt-register")}
+              title="PCPNDT Register"
+              className="flex items-center gap-1 px-2 py-1 rounded-md border border-amber-300 bg-amber-50 text-amber-700 text-[11px] font-semibold hover:bg-amber-100 active:scale-[0.97] transition-all"
+            >
+              <BookOpen size={11} /> PCPNDT
+            </button>
+            <button
+              onClick={onNewOrder}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[hsl(220,55%,23%)] text-white text-[11px] font-semibold hover:bg-[hsl(220,55%,30%)] active:scale-[0.97] transition-all"
+            >
+              <Plus size={12} /> New Study
+            </button>
+          </div>
         </div>
 
         {/* Filters row: modality + status */}

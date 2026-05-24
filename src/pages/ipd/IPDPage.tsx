@@ -24,6 +24,10 @@ export interface BedData {
     doctor_name: string;
     los_days: number;
     expected_discharge_date: string | null;
+    is_mlc?: boolean;
+    mlc_number?: string | null;
+    payer_type?: string | null;
+    abha_id?: string | null;
   } | null;
 }
 
@@ -67,7 +71,7 @@ const IPDPage: React.FC = () => {
         .order("bed_number"),
       supabase
         .from("admissions")
-        .select("id, patient_id, bed_id, ward_id, admission_type, admission_number, admitting_diagnosis, admitted_at, expected_discharge_date, admitting_doctor_id, status, patient:patients(full_name), bed:beds(bed_number), ward:wards(name), doctor:users!admissions_admitting_doctor_id_fkey(full_name)")
+        .select("id, patient_id, bed_id, ward_id, admission_type, admission_number, admitting_diagnosis, admitted_at, expected_discharge_date, admitting_doctor_id, status, is_mlc, mlc_number, payer_type, patient:patients(full_name, abha_id), bed:beds(bed_number), ward:wards(name), doctor:users!admissions_admitting_doctor_id_fkey(full_name)")
         .eq("hospital_id", ud.hospital_id)
         .eq("status", "active")
         .order("admitted_at", { ascending: false }),
@@ -109,6 +113,10 @@ const IPDPage: React.FC = () => {
         doctor_name: doctor?.full_name || "—",
         los_days: los,
         expected_discharge_date: a.expected_discharge_date as string | null,
+        is_mlc: (a.is_mlc as boolean) || false,
+        mlc_number: (a.mlc_number as string | null) || null,
+        abha_id: (a.patient as any)?.abha_id || null,
+        payer_type: (a.payer_type as string | null) || null,
       });
 
       admRows.push({

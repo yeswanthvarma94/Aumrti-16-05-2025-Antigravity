@@ -4,7 +4,8 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { X, Search, CheckCircle2, ArrowLeft, CreditCard, Printer, UserPlus, AlertTriangle } from "lucide-react";
+import { X, Search, CheckCircle2, ArrowLeft, CreditCard, Printer, UserPlus, AlertTriangle, ShieldCheck } from "lucide-react";
+import ABHASearchPanel from "@/components/patients/ABHASearchPanel";
 import { autoPostJournalEntry } from "@/lib/accounting";
 import { generateBillNumber } from "@/hooks/useBillNumber";
 import { logAudit } from "@/lib/auditLog";
@@ -23,6 +24,7 @@ interface FoundPatient {
   full_name: string;
   uhid: string;
   phone: string | null;
+  abha_id?: string | null;
 }
 
 const genders = ["male", "female", "other"] as const;
@@ -83,15 +85,29 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
   const [referralDoctorId, setReferralDoctorId] = useState<string | null>(null);
   const [showReferralModal, setShowReferralModal] = useState(false);
 
-  // 21-F visit type
+  // Visit type / purpose
   const [visitType, setVisitType] = useState<"new" | "revisit" | "followup" | "emergency">("new");
+  const [visitPurpose, setVisitPurpose] = useState<"new" | "revisit" | "follow_up" | "review" | "procedure">("new");
+  const [revisitOfTokenId, setRevisitOfTokenId] = useState<string | null>(null);
+  const [revisitSuggestion, setRevisitSuggestion] = useState<{ tokenId: string; date: string; doctor: string } | null>(null);
+
+  // Revisit discount
+  const [revisitDiscount, setRevisitDiscount] = useState(0);
+  const [revisitDiscountNote, setRevisitDiscountNote] = useState("");
 
   // 21-M MLC
   const [isMlc, setIsMlc] = useState(false);
   const [policeStation, setPoliceStation] = useState("");
+  const [showAbhaLink, setShowAbhaLink] = useState(false);
+
+  // Payer
+  const [payerType, setPayerType] = useState("cash");
+  const [payerId, setPayerId] = useState<string | null>(null);
+  const [payerMasters, setPayerMasters] = useState<{ id: string; payer_name: string; payer_type: string }[]>([]);
 
   // Payment fields
   const [consultationFee, setConsultationFee] = useState(DEFAULT_CONSULTATION_FEE);
+  const [baseFee, setBaseFee] = useState(DEFAULT_CONSULTATION_FEE);
   const [paymentMode, setPaymentMode] = useState("cash");
   const [paymentRef, setPaymentRef] = useState("");
   const [receiptData, setReceiptData] = useState<{
@@ -105,6 +121,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
     paymentMode: string;
     date: string;
     paid: boolean;
+    discountNote?: string;
   } | null>(null);
   const [hospitalInfo, setHospitalInfo] = useState<{ name: string; address: string | null } | null>(null);
 
@@ -113,6 +130,8 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
       supabase.from("hospitals").select("name, address").eq("id", hospitalId).maybeSingle().then(({ data }) => {
         setHospitalInfo(data);
       });
+      (supabase as any).from("payer_masters").select("id, payer_name, payer_type").eq("hospital_id", hospitalId).eq("is_active", true).order("payer_name")
+        .then(({ data }: any) => setPayerMasters(data || []));
     }
   }, [hospitalId]);
 
@@ -176,6 +195,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
           .limit(1);
         if (data?.[0]?.fee) {
           setConsultationFee(data[0].fee);
+          setBaseFee(data[0].fee);
           setFeeSource("doctor");
           return;
         }
@@ -193,6 +213,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
           .limit(1);
         if (data?.[0]?.fee) {
           setConsultationFee(data[0].fee);
+          setBaseFee(data[0].fee);
           setFeeSource("dept");
           return;
         }
@@ -209,14 +230,89 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
         .limit(1);
       if (data?.[0]?.fee) {
         setConsultationFee(data[0].fee);
+        setBaseFee(data[0].fee);
         setFeeSource("global");
         return;
       }
       // 4. Hardcoded fallback
       setConsultationFee(DEFAULT_CONSULTATION_FEE);
+      setBaseFee(DEFAULT_CONSULTATION_FEE);
       setFeeSource("default");
     })();
   }, [hospitalId, doctorId, deptId]);
+
+  // Auto-detect revisit when patient + doctor are selected
+  useEffect(() => {
+    if (!foundPatient || !useExisting || !doctorId || !hospitalId) {
+      setRevisitSuggestion(null);
+      return;
+    }
+    (async () => {
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+      const { data } = await (supabase as any)
+        .from("opd_tokens")
+        .select("id, visit_date, doctor_id, users!doctor_id(full_name)")
+        .eq("patient_id", foundPatient.id)
+        .eq("doctor_id", doctorId)
+        .gte("visit_date", thirtyDaysAgo)
+        .in("status", ["completed", "in_consultation"])
+        .order("visit_date", { ascending: false })
+        .limit(1);
+      if (data && data[0]) {
+        const t = data[0];
+        setRevisitSuggestion({
+          tokenId: t.id,
+          date: t.visit_date,
+          doctor: t.users?.full_name || "",
+        });
+      } else {
+        setRevisitSuggestion(null);
+      }
+    })();
+  }, [foundPatient, useExisting, doctorId, hospitalId]);
+
+  // Apply revisit discount rules when purpose changes
+  useEffect(() => {
+    if (!hospitalId || !revisitSuggestion || !["revisit", "follow_up", "review"].includes(visitPurpose)) {
+      setRevisitDiscount(0);
+      setRevisitDiscountNote("");
+      setConsultationFee(baseFee);
+      return;
+    }
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("hospital_settings")
+        .select("value")
+        .eq("hospital_id", hospitalId)
+        .eq("key", "opd_revisit_rules")
+        .maybeSingle();
+      if (!data?.value?.enabled || !Array.isArray(data.value.rules)) return;
+      const daysSince = Math.floor((Date.now() - new Date(revisitSuggestion.date).getTime()) / 86400000);
+      for (const rule of data.value.rules as { within_days: number; same_doctor: boolean; discount_type: string; amount: number }[]) {
+        if (daysSince <= rule.within_days) {
+          let discounted = baseFee;
+          let note = "";
+          if (rule.discount_type === "free") {
+            discounted = 0;
+            note = `Revisit discount — free within ${rule.within_days} days`;
+          } else if (rule.discount_type === "percent") {
+            discounted = Math.round(baseFee * (1 - rule.amount / 100));
+            note = `Revisit discount — ${rule.amount}% off (within ${rule.within_days} days)`;
+          } else if (rule.discount_type === "fixed") {
+            discounted = Math.max(0, baseFee - rule.amount);
+            note = `Revisit discount — ₹${rule.amount} off (within ${rule.within_days} days)`;
+          }
+          setConsultationFee(discounted);
+          setRevisitDiscount(baseFee - discounted);
+          setRevisitDiscountNote(note);
+          return;
+        }
+      }
+      setConsultationFee(baseFee);
+      setRevisitDiscount(0);
+      setRevisitDiscountNote("");
+    })();
+  }, [visitPurpose, revisitSuggestion, hospitalId, baseFee]);
 
   // Phone/name/UHID search
   const searchPatient = useCallback(async (val: string) => {
@@ -224,7 +320,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
     setSearching(true);
     const { data } = await supabase
       .from("patients")
-      .select("id, full_name, uhid, phone")
+      .select("id, full_name, uhid, phone, abha_id")
       .eq("hospital_id", hospitalId)
       .or(`phone.ilike.%${val}%,full_name.ilike.%${val}%,uhid.ilike.%${val}%`)
       .limit(5);
@@ -373,6 +469,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
 
       const fee = consultationFee;
       const isPaid = !skipPayment && fee > 0;
+      const discountNote = revisitDiscountNote;
 
       // Create bill
       const { data: bill, error: billErr } = await supabase.from("bills").insert({
@@ -400,12 +497,13 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
       await supabase.from("bill_line_items").insert({
         hospital_id: hospitalId,
         bill_id: bill.id,
-        description: "Consultation Fee",
+        description: discountNote ? `Consultation Fee (${discountNote})` : "Consultation Fee",
         item_type: "consultation",
-        unit_rate: fee,
+        unit_rate: revisitDiscount > 0 ? baseFee : fee,
         quantity: 1,
+        discount_amount: revisitDiscount > 0 ? revisitDiscount : undefined,
         total_amount: fee,
-      });
+      } as any);
 
       // Insert payment if paid
       if (isPaid) {
@@ -464,7 +562,11 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
         status: "waiting",
         priority,
         visit_type: visitType,
+        visit_purpose: visitPurpose,
+        revisit_of_token_id: revisitOfTokenId || null,
         is_mlc: isMlc,
+        payer_type: payerType,
+        payer_id: payerId || null,
       });
       if (tokenErr) throw tokenErr;
 
@@ -506,6 +608,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
         paymentMode: isPaid ? paymentMode : "—",
         date: today,
         paid: isPaid,
+        discountNote: discountNote || undefined,
       };
       setReceiptData(rData);
       setStep("receipt");
@@ -554,6 +657,7 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
           <span class="label">Consultation Fee</span>
           <span class="amount" style="font-size:16px;">₹${receiptData.fee.toLocaleString("en-IN")}</span>
         </div>
+        ${receiptData.discountNote ? `<div class="row"><span class="label" style="color:#059669;">Discount Applied</span><span style="color:#059669;font-size:11px;">${receiptData.discountNote}</span></div>` : ""}
         <div class="row">
           <span class="label">Payment</span>
           <span class="${paidClass}">${paidLabel}</span>
@@ -619,13 +723,46 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
                 </div>
               )}
               {useExisting && foundPatient && (
-                <div className="mt-2 p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                    <span className="text-xs font-medium text-emerald-700">Patient selected</span>
+                <div className="mt-2 space-y-2">
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        <span className="text-xs font-medium text-emerald-700">Patient selected</span>
+                      </div>
+                      {foundPatient.abha_id && (
+                        <span className="text-[10px] flex items-center gap-1 text-emerald-700 font-semibold">
+                          <ShieldCheck className="h-3 w-3" /> ABHA ✓
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm font-medium text-slate-800 mt-1">{foundPatient.full_name} · {foundPatient.uhid}</p>
+                    <div className="flex items-center gap-3 mt-1">
+                      <button onClick={() => { setUseExisting(false); setFoundPatient(null); setShowAbhaLink(false); }} className="text-[11px] text-slate-500 hover:underline">Change</button>
+                      {!foundPatient.abha_id && (
+                        <button
+                          onClick={() => setShowAbhaLink(!showAbhaLink)}
+                          className="text-[11px] text-blue-600 hover:underline font-medium"
+                        >
+                          {showAbhaLink ? "Hide ABHA" : "+ Link ABHA ID"}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-sm font-medium text-slate-800 mt-1">{foundPatient.full_name} · {foundPatient.uhid}</p>
-                  <button onClick={() => { setUseExisting(false); setFoundPatient(null); }} className="mt-1 text-[11px] text-slate-500 hover:underline">Change</button>
+                  {showAbhaLink && !foundPatient.abha_id && (
+                    <div className="p-3 border border-blue-200 rounded-lg bg-blue-50/50">
+                      <p className="text-xs font-semibold text-blue-800 mb-2">Link ABHA ID</p>
+                      <ABHASearchPanel
+                        patientId={foundPatient.id}
+                        hospitalId={hospitalId}
+                        existingAbhaId={foundPatient.abha_id}
+                        onLinked={(abhaId) => {
+                          setFoundPatient((prev) => prev ? { ...prev, abha_id: abhaId } : prev);
+                          setShowAbhaLink(false);
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -771,6 +908,63 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
               </div>
             </div>
 
+            {/* Visit Purpose */}
+            <div className="mt-3">
+              <label className="text-xs font-medium text-slate-600">Visit Purpose</label>
+              <select
+                value={visitPurpose}
+                onChange={(e) => setVisitPurpose(e.target.value as typeof visitPurpose)}
+                className="w-full h-9 px-2 mt-1 border border-slate-200 rounded-lg text-xs outline-none bg-white"
+              >
+                <option value="new">New Consultation</option>
+                <option value="revisit">Revisit (same problem)</option>
+                <option value="follow_up">Follow-Up</option>
+                <option value="review">Review</option>
+                <option value="procedure">Procedure</option>
+              </select>
+            </div>
+
+            {/* Revisit auto-detection suggestion */}
+            {revisitSuggestion && (
+              <div className="mt-2 p-2.5 bg-amber-50 border border-amber-300 rounded-lg">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold text-amber-800">
+                      Possible revisit detected
+                    </p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Last visit: {new Date(revisitSuggestion.date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      {revisitSuggestion.doctor ? ` · Dr. ${revisitSuggestion.doctor}` : ""}
+                    </p>
+                    {revisitDiscountNote && (
+                      <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">
+                        🏷 {revisitDiscountNote} · Fee: ₹{consultationFee.toLocaleString("en-IN")}
+                        {revisitDiscount > 0 && <span className="line-through text-slate-400 ml-1 font-normal">₹{baseFee.toLocaleString("en-IN")}</span>}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        setRevisitOfTokenId(revisitSuggestion.tokenId);
+                        if (visitPurpose === "new") setVisitPurpose("revisit");
+                        setRevisitSuggestion(null);
+                      }}
+                      className="text-[10px] bg-amber-600 text-white px-2 py-1 rounded font-semibold hover:bg-amber-700"
+                    >
+                      Link Visit
+                    </button>
+                    <button
+                      onClick={() => setRevisitSuggestion(null)}
+                      className="text-[10px] text-amber-600 border border-amber-300 px-2 py-1 rounded hover:bg-amber-50"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* MLC Flag */}
             <div className="mt-3 flex items-start gap-3">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -789,6 +983,34 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
                 <p className="text-[11px] text-red-700 font-medium">MLC — Inform police within 24 hours. Maintain MLC register.</p>
               </div>
             )}
+
+            {/* Payer Type */}
+            <div className="mt-3">
+              <label className="text-xs font-medium text-slate-600">Payer Type</label>
+              <div className="flex gap-2 mt-1">
+                <select value={payerType} onChange={(e) => { setPayerType(e.target.value); setPayerId(null); }}
+                  className="flex-1 h-9 px-2 border border-slate-200 rounded-lg text-xs outline-none">
+                  <option value="cash">Cash</option>
+                  <option value="credit">Credit / Deferred</option>
+                  <option value="corporate">Corporate</option>
+                  <option value="tpa">TPA / Insurance</option>
+                  <option value="pmjay">PMJAY / Ayushman</option>
+                  <option value="cghs">CGHS</option>
+                  <option value="esi">ESI</option>
+                  <option value="state_scheme">State Scheme</option>
+                  <option value="other">Other</option>
+                </select>
+                {payerType !== "cash" && (
+                  <select value={payerId || ""} onChange={(e) => setPayerId(e.target.value || null)}
+                    className="flex-1 h-9 px-2 border border-slate-200 rounded-lg text-xs outline-none">
+                    <option value="">Select payer…</option>
+                    {payerMasters.filter((pm) => pm.payer_type === payerType).map((pm) => (
+                      <option key={pm.id} value={pm.id}>{pm.payer_name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
 
             {/* DPDP Consent */}
             {!useExisting && (

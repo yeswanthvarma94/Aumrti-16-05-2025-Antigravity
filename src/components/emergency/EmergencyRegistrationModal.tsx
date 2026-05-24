@@ -14,6 +14,7 @@ interface Props {
   onClose: () => void;
   hospitalId: string | null;
   onRegistered: () => void;
+  onMlcRequired?: (edVisitId: string, patientId: string, patientName: string) => void;
 }
 
 const triageLevels = [
@@ -27,7 +28,7 @@ const triageColors: Record<string, string> = {
   P1: "#EF4444", P2: "#F97316", P3: "#EAB308", P4: "#22C55E",
 };
 
-const EmergencyRegistrationModal: React.FC<Props> = ({ open, onClose, hospitalId, onRegistered }) => {
+const EmergencyRegistrationModal: React.FC<Props> = ({ open, onClose, hospitalId, onRegistered, onMlcRequired }) => {
   const [name, setName] = useState("Unknown");
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("male");
@@ -119,15 +120,15 @@ const EmergencyRegistrationModal: React.FC<Props> = ({ open, onClose, hospitalId
       patientId = patient.id;
     }
 
-    // Create ED visit
-    const { error: vErr } = await supabase.from("ed_visits").insert({
+    // Create ED visit — capture ID so we can link MLC case
+    const { data: edVisit, error: vErr } = await supabase.from("ed_visits").insert({
       hospital_id: hospitalId,
       patient_id: patientId,
       triage_category: triage,
       chief_complaint: complaint || null,
       mlc,
       arrival_mode: "walkin",
-    });
+    }).select("id").maybeSingle();
 
     // Log AI triage accuracy if used
     if (aiTriageResult) {
@@ -149,9 +150,15 @@ const EmergencyRegistrationModal: React.FC<Props> = ({ open, onClose, hospitalId
     }
 
     toast({ title: `Patient triaged as ${triage}` });
+    const registeredName = name || "Unknown";
     reset();
     onClose();
     onRegistered();
+
+    // Open MLC details modal if required
+    if (mlc && edVisit?.id && onMlcRequired) {
+      onMlcRequired(edVisit.id, patientId, registeredName);
+    }
   };
 
   return (

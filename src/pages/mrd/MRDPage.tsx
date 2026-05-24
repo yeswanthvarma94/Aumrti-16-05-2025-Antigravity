@@ -10,6 +10,7 @@ import RecordRequestsTab from "@/components/mrd/RecordRequestsTab";
 import DeathCertificatesTab from "@/components/mrd/DeathCertificatesTab";
 import RetentionTab from "@/components/mrd/RetentionTab";
 import MaternityRegisterTab from "@/components/mrd/MaternityRegisterTab";
+import MLCRegisterTab from "@/components/mrd/MLCRegisterTab";
 
 const MRDPage: React.FC = () => {
   const [kpis, setKpis] = useState({ totalRecords: 0, pendingCoding: 0, pendingRequests: 0, dueDestruction: 0 });
@@ -100,6 +101,7 @@ const MRDPage: React.FC = () => {
           <TabsTrigger value="death">📜 Death Certs</TabsTrigger>
           <TabsTrigger value="retention">📅 Retention</TabsTrigger>
           <TabsTrigger value="maternity">🤱 Form 8</TabsTrigger>
+          <TabsTrigger value="mlc">⚖️ MLC Register</TabsTrigger>
         </TabsList>
 
         <TabsContent value="records" className="flex-1 overflow-hidden mt-2">
@@ -119,6 +121,9 @@ const MRDPage: React.FC = () => {
         </TabsContent>
         <TabsContent value="maternity" className="flex-1 overflow-hidden mt-2">
           <MaternityRegisterTab hospitalId={hospitalId} />
+        </TabsContent>
+        <TabsContent value="mlc" className="flex-1 overflow-hidden mt-2">
+          {hospitalId && <MLCRegisterTab hospitalId={hospitalId} />}
         </TabsContent>
       </Tabs>
     </div>

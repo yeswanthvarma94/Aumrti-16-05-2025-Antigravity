@@ -3,8 +3,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
   Home, LayoutGrid, UserPlus, Stethoscope, BedDouble,
   FlaskConical, Pill, Receipt, BarChart3, Inbox, Settings,
-  LogOut, HeartPulse, Activity, FolderOpen, X, CalendarDays, Package, Building2,
+  LogOut, HeartPulse, Activity, FolderOpen, X, CalendarDays, Package, Building2, ShieldCheck, Wrench, Users,
 } from "lucide-react";
+import { useCredentialAlert } from "@/contexts/CredentialAlertContext";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./SidebarContext";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -30,6 +31,7 @@ const quickAccessItems: SidebarItem[] = [
   { label: "OPD Queue", path: "/opd", icon: Stethoscope },
   { label: "IPD / Wards", path: "/ipd", icon: BedDouble },
   { label: "Billing", path: "/billing", icon: Receipt },
+  { label: "HR & Staff", path: "/hr", icon: Users },
   { label: "Asset Management", path: "/assets", icon: Package },
   { label: "CEO Board", path: "/ceo-board", icon: Building2 },
   { label: "Govt Schemes", path: "/pmjay", icon: HeartPulse },
@@ -39,6 +41,8 @@ const quickAccessItems: SidebarItem[] = [
 
 const recordsItems: SidebarItem[] = [
   { label: "Medical Records", path: "/mrd", icon: FolderOpen },
+  { label: "IPC Dashboard",   path: "/ipc/dashboard", icon: ShieldCheck },
+  { label: "FMS / Safety",    path: "/fms/dashboard", icon: Wrench },
 ];
 
 const bottomItems: SidebarItem[] = [
@@ -57,6 +61,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
   const navigate = useNavigate();
   const { toast } = useToast();
   const { hospitalId, role, permissions, loading } = useHospitalId();
+  const { expiringCount } = useCredentialAlert();
   const [userName, setUserName] = useState("User");
   const [userInitials, setUserInitials] = useState("U");
 
@@ -91,6 +96,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
     const Icon = item.icon;
     const active = location.pathname === item.path;
     const isModules = item.path === "/modules";
+    const badge = item.path === "/hr" ? expiringCount : 0;
 
     return (
       <button
@@ -104,7 +110,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
           isModules && !active && "border border-sidebar-foreground/20"
         )}
       >
-        <Icon size={18} className="shrink-0" />
+        <div className="relative shrink-0">
+          <Icon size={18} />
+          {badge > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 h-4 min-w-[16px] rounded-full bg-red-500 text-[9px] font-bold text-white flex items-center justify-center px-0.5 leading-none">
+              {badge > 99 ? "99+" : badge}
+            </span>
+          )}
+        </div>
         {!isCollapsed && <span>{item.label}</span>}
       </button>
     );

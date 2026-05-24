@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Scissors } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Scissors, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { OTSchedule } from "@/pages/ot/OTPage";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,6 +9,7 @@ import CaseDetailsTab from "./tabs/CaseDetailsTab";
 import OTTeamTab from "./tabs/OTTeamTab";
 import PACUTab from "./tabs/PACUTab";
 import OTBillingTab from "./tabs/OTBillingTab";
+import OTImplantsConsumablesTab from "./tabs/OTImplantsConsumablesTab";
 import EndCaseModal from "./EndCaseModal";
 
 interface Props {
@@ -17,7 +18,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-const BASE_TABS = ["WHO Checklist", "Case Details", "OT Team"] as const;
+const BASE_TABS = ["WHO Checklist", "Case Details", "OT Team", "Implants & Consumables"] as const;
 const PACU_TAB = "PACU" as const;
 const BILLING_TAB = "Billing" as const;
 type TabName = (typeof BASE_TABS)[number] | typeof PACU_TAB | typeof BILLING_TAB;
@@ -26,6 +27,28 @@ const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) =
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabName>("WHO Checklist");
   const [endCaseOpen, setEndCaseOpen] = useState(false);
+  const [showPacGate, setShowPacGate] = useState(false);
+  const [pacNotes, setPacNotes] = useState("");
+  const [markingPac, setMarkingPac] = useState(false);
+  const [privilegeWarning, setPrivilegeWarning] = useState(false);
+  const [privilegeWarningDismissed, setPrivilegeWarningDismissed] = useState(false);
+
+  useEffect(() => {
+    if (!schedule?.surgeon_id || !hospitalId) return;
+    setPrivilegeWarning(false);
+    setPrivilegeWarningDismissed(false);
+    const check = async () => {
+      const { data } = await (supabase as any)
+        .from("staff_privileges")
+        .select("id")
+        .eq("hospital_id", hospitalId)
+        .eq("user_id", schedule.surgeon_id)
+        .eq("active", true)
+        .limit(1);
+      if (!data || data.length === 0) setPrivilegeWarning(true);
+    };
+    check();
+  }, [schedule?.id, schedule?.surgeon_id, hospitalId]);
 
   const updateStatus = async (newStatus: string, extras: Record<string, any> = {}) => {
     if (!schedule) return;
@@ -39,6 +62,32 @@ const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) =
       toast({ title: `Case ${newStatus === "confirmed" ? "confirmed" : newStatus === "in_progress" ? "started" : newStatus}` });
       onRefresh();
     }
+  };
+
+  const handleConfirmCase = () => {
+    if (!schedule?.pac_cleared) {
+      setShowPacGate(true);
+      return;
+    }
+    updateStatus("confirmed");
+  };
+
+  const markPacAndConfirm = async () => {
+    if (!schedule) return;
+    setMarkingPac(true);
+    const { error } = await supabase
+      .from("ot_schedules")
+      .update({ pac_done: true, pac_cleared: true, pac_done_at: new Date().toISOString(), pac_notes: pacNotes || null })
+      .eq("id", schedule.id);
+    if (error) {
+      toast({ title: "Failed to record PAC", description: error.message, variant: "destructive" });
+      setMarkingPac(false);
+      return;
+    }
+    setShowPacGate(false);
+    setPacNotes("");
+    setMarkingPac(false);
+    await updateStatus("confirmed");
   };
 
   if (!schedule) {
@@ -70,6 +119,18 @@ const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) =
 
   return (
     <div className="flex-1 bg-muted/20 flex flex-col overflow-hidden">
+      {/* Privilege warning banner */}
+      {privilegeWarning && !privilegeWarningDismissed && (
+        <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-300 px-4 py-2 flex items-center gap-2 shrink-0">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+          <span className="text-xs text-amber-800 dark:text-amber-200 flex-1">
+            No active clinical privileges on record for <strong>Dr. {schedule.surgeon?.full_name}</strong>. Verify before proceeding.
+          </span>
+          <button onClick={() => setPrivilegeWarningDismissed(true)} className="text-amber-500 hover:text-amber-700 text-[10px]">
+            Dismiss
+          </button>
+        </div>
+      )}
       {/* Case Header */}
       <div className="bg-card border-b border-border px-5 py-3 flex items-center gap-4 flex-shrink-0">
         <div className="flex-1 min-w-0">
@@ -96,12 +157,20 @@ const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) =
         </div>
 
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
-          <span className={cn("text-xs px-3 py-1 rounded-full font-semibold", statusColors[schedule.status] || statusColors.scheduled)}>
-            {schedule.status === "in_progress" && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1 animate-pulse" />}
-            {schedule.status === "in_progress" ? "🔴 LIVE" : schedule.status === "confirmed" ? "Confirmed ✓" : schedule.status === "completed" ? "Completed ✓" : schedule.status.charAt(0).toUpperCase() + schedule.status.slice(1)}
-          </span>
+          <div className="flex items-center gap-2">
+            {schedule.status === "scheduled" && !schedule.pac_cleared && (
+              <span className="text-[9px] bg-amber-100 text-amber-700 border border-amber-300 px-2 py-0.5 rounded-full font-semibold">⚠ PAC Pending</span>
+            )}
+            {schedule.status === "scheduled" && schedule.pac_cleared && (
+              <span className="text-[9px] bg-emerald-100 text-emerald-700 border border-emerald-300 px-2 py-0.5 rounded-full font-semibold">✓ PAC Cleared</span>
+            )}
+            <span className={cn("text-xs px-3 py-1 rounded-full font-semibold", statusColors[schedule.status] || statusColors.scheduled)}>
+              {schedule.status === "in_progress" && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1 animate-pulse" />}
+              {schedule.status === "in_progress" ? "🔴 LIVE" : schedule.status === "confirmed" ? "Confirmed ✓" : schedule.status === "completed" ? "Completed ✓" : schedule.status.charAt(0).toUpperCase() + schedule.status.slice(1)}
+            </span>
+          </div>
           {schedule.status === "scheduled" && (
-            <button onClick={() => updateStatus("confirmed")} className="text-[11px] bg-emerald-500 text-white px-3 py-1 rounded-md font-semibold hover:bg-emerald-600 active:scale-95 transition-all">
+            <button onClick={handleConfirmCase} className="text-[11px] bg-emerald-500 text-white px-3 py-1 rounded-md font-semibold hover:bg-emerald-600 active:scale-95 transition-all">
               Confirm Case
             </button>
           )}
@@ -142,11 +211,52 @@ const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) =
         ))}
       </div>
 
+      {/* PAC gate inline banner */}
+      {showPacGate && (
+        <div className="bg-amber-50 border-b border-amber-300 px-5 py-3 flex-shrink-0">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-bold text-amber-800">Pre-Anaesthesia Check (PAC) Required</p>
+              <p className="text-xs text-amber-700 mt-0.5">PAC has not been completed. Please confirm that the anaesthetist has evaluated and cleared this patient before proceeding.</p>
+              <div className="mt-2">
+                <textarea
+                  className="w-full text-xs border border-amber-300 rounded-md px-2 py-1.5 bg-white placeholder:text-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  rows={2}
+                  placeholder="PAC notes (optional — e.g. ASA grade, special precautions)…"
+                  value={pacNotes}
+                  onChange={(e) => setPacNotes(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  onClick={() => { setShowPacGate(false); setPacNotes(""); }}
+                  className="text-xs px-3 py-1.5 rounded-md border border-amber-300 text-amber-700 hover:bg-amber-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={markPacAndConfirm}
+                  disabled={markingPac}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-amber-600 text-white font-semibold hover:bg-amber-700 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <CheckCircle2 size={13} />
+                  {markingPac ? "Clearing PAC…" : "Mark PAC Cleared & Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === "WHO Checklist" && <WHOChecklistTab schedule={schedule} onRefresh={onRefresh} />}
         {activeTab === "Case Details" && <CaseDetailsTab schedule={schedule} onRefresh={onRefresh} />}
         {activeTab === "OT Team" && <OTTeamTab schedule={schedule} />}
+        {activeTab === "Implants & Consumables" && (
+          <OTImplantsConsumablesTab schedule={schedule} hospitalId={hospitalId} onRefresh={onRefresh} />
+        )}
         {activeTab === PACU_TAB && (schedule.status === "in_progress" || schedule.status === "completed") && (
           <PACUTab schedule={schedule} />
         )}

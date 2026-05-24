@@ -42,6 +42,7 @@ const SettingsStaffPage = lazy(() => import("./pages/settings/SettingsStaffPage"
 const SettingsDepartmentsPage = lazy(() => import("./pages/settings/SettingsDepartmentsPage"));
 const SettingsWardsPage = lazy(() => import("./pages/settings/SettingsWardsPage"));
 const SettingsServicesPage = lazy(() => import("./pages/settings/SettingsServicesPage"));
+const SettingsPayerMastersPage = lazy(() => import("./pages/settings/SettingsPayerMastersPage"));
 const SettingsDrugsPage = lazy(() => import("./pages/settings/SettingsDrugsPage"));
 const SettingsProfilePage = lazy(() => import("./pages/settings/SettingsProfilePage"));
 const SettingsRolesPage = lazy(() => import("./pages/settings/SettingsRolesPage"));
@@ -71,6 +72,7 @@ const APIConfigHubPage = lazy(() => import("./pages/settings/APIConfigHubPage"))
 const SettingsICDCodesPage = lazy(() => import("./pages/settings/SettingsICDCodesPage"));
 const SpecialtyTemplateBuilderPage = lazy(() => import("./pages/settings/SpecialtyTemplateBuilderPage"));
 const AnalyticsPage = lazy(() => import("./pages/analytics/AnalyticsPage"));
+const ExecutiveDashboardPage = lazy(() => import("./pages/analytics/ExecutiveDashboardPage"));
 const InboxPage = lazy(() => import("./pages/inbox/InboxPage"));
 const TelemedicinePage = lazy(() => import("./pages/telemedicine/TelemedicinePage"));
 const HODDashboardPage = lazy(() => import("./pages/hod/HODDashboardPage"));
@@ -111,6 +113,7 @@ const PatientSummaryPage = lazy(() => import("./pages/patients/PatientSummaryPag
 const PackagesPage = lazy(() => import("./pages/packages/PackagesPage"));
 const IVFPage = lazy(() => import("./pages/ivf/IVFPage"));
 const SettingsRadiologyPage = lazy(() => import("./pages/settings/SettingsRadiologyPage"));
+const PCPNDTRegisterPage = lazy(() => import("./pages/radiology/PCPNDTRegisterPage"));
 const SettingsDayCareProceduresPage = lazy(() => import("./pages/settings/SettingsDayCareProceduresPage"));
 const SchedulingPage = lazy(() => import("./pages/schedule/SchedulingPage"));
 const AmbulancePage = lazy(() => import("./pages/ambulance/AmbulancePage"));
@@ -123,7 +126,19 @@ const PartographPage = lazy(() => import("./pages/specialty/PartographPage"));
 const ProcurementRecommendationsPage = lazy(() => import("./pages/inventory/ProcurementRecommendationsPage"));
 const PublicBookingPage = lazy(() => import("./pages/packages/PublicBookingPage"));
 const SettingsHMISPage = lazy(() => import("./pages/settings/SettingsHMISPage"));
+const SettingsAIFeaturesPage = lazy(() => import("./pages/settings/SettingsAIFeaturesPage"));
+const SettingsInventoryPage = lazy(() => import("./pages/settings/SettingsInventoryPage"));
 const PatientJoinPage = lazy(() => import("./pages/teleconsult/PatientJoinPage"));
+const NABHMatrixPage = lazy(() => import("./pages/nabh/NABHMatrixPage"));
+const SafetyEventsPage = lazy(() => import("./pages/quality/SafetyEventsPage"));
+const IPCDashboardPage = lazy(() => import("./pages/ipc/IPCDashboardPage"));
+const ClinicalAuditPage = lazy(() => import("./pages/quality/ClinicalAuditPage"));
+const QIProjectsPage = lazy(() => import("./pages/quality/QIProjectsPage"));
+const CommitteesPage = lazy(() => import("./pages/quality/CommitteesPage"));
+const FMSDashboardPage = lazy(() => import("./pages/fms/FMSDashboardPage"));
+const SettingsRecordRetentionPage = lazy(() => import("./pages/settings/SettingsRecordRetentionPage"));
+const IMSAccessLogsPage = lazy(() => import("./pages/ims/IMSAccessLogsPage"));
+const ConfigChangeLogPage = lazy(() => import("./pages/settings/ConfigChangeLogPage"));
 const CostCentresPage = lazy(() => import("./pages/accounts/CostCentresPage"));
 
 const queryClient = new QueryClient({
@@ -200,6 +215,7 @@ const App = () => (
             <Route path="/nursing" element={<RG path="/nursing"><SM name="Nursing"><NursingPage /></SM></RG>} />
             <Route path="/lab" element={<RG path="/lab"><SM name="Laboratory"><LabPage /></SM></RG>} />
             <Route path="/radiology" element={<RG path="/radiology"><SM name="Radiology"><RadiologyPage /></SM></RG>} />
+            <Route path="/radiology/pcpndt-register" element={<RG path="/radiology"><SM name="PCPNDT Register"><PCPNDTRegisterPage /></SM></RG>} />
             <Route path="/pharmacy" element={<RG path="/pharmacy"><SM name="Pharmacy"><PharmacyPage /></SM></RG>} />
             <Route path="/billing" element={<RG path="/billing"><SM name="Billing"><BillingPage /></SM></RG>} />
             <Route path="/billing/closure" element={<RG path="/billing/closure"><SM name="Day Closure"><DailyCashClosurePage /></SM></RG>} />
@@ -208,7 +224,15 @@ const App = () => (
             <Route path="/hr" element={<RG path="/hr"><SM name="HR & Payroll"><HRPage /></SM></RG>} />
             <Route path="/inventory" element={<RG path="/inventory"><SM name="Inventory"><InventoryPage /></SM></RG>} />
             <Route path="/quality" element={<RG path="/quality"><SM name="Quality"><QualityPage /></SM></RG>} />
+            <Route path="/nabh/compliance" element={<RG path="/nabh/compliance"><SM name="NABH Compliance Matrix"><NABHMatrixPage /></SM></RG>} />
+            <Route path="/quality/events" element={<RG path="/quality/events"><SM name="Safety Events"><SafetyEventsPage /></SM></RG>} />
+            <Route path="/ipc/dashboard" element={<RG path="/ipc/dashboard"><SM name="IPC Surveillance"><IPCDashboardPage /></SM></RG>} />
+            <Route path="/quality/clinical-audits" element={<RG path="/quality/clinical-audits"><SM name="Clinical Audits"><ClinicalAuditPage /></SM></RG>} />
+            <Route path="/quality/qi-projects" element={<RG path="/quality/qi-projects"><SM name="QI Projects"><QIProjectsPage /></SM></RG>} />
+            <Route path="/quality/committees" element={<RG path="/quality/committees"><SM name="Committees"><CommitteesPage /></SM></RG>} />
+            <Route path="/fms/dashboard" element={<RG path="/fms/dashboard"><SM name="Facility Management"><FMSDashboardPage /></SM></RG>} />
             <Route path="/analytics" element={<RG path="/analytics"><SM name="Analytics"><AnalyticsPage /></SM></RG>} />
+            <Route path="/executive-dashboard" element={<RG path="/analytics"><SM name="Executive Dashboard"><ExecutiveDashboardPage /></SM></RG>} />
             <Route path="/telemedicine" element={<RG path="/telemedicine"><SM name="Telemedicine"><TelemedicinePage /></SM></RG>} />
             <Route path="/inbox" element={<RG path="/inbox"><SM name="Inbox"><InboxPage /></SM></RG>} />
             <Route path="/settings" element={<RG path="/settings"><SM name="Settings"><SettingsPage /></SM></RG>} />
@@ -217,6 +241,7 @@ const App = () => (
             <Route path="/settings/departments" element={<RG path="/settings"><SM name="Departments"><SettingsDepartmentsPage /></SM></RG>} />
             <Route path="/settings/wards" element={<RG path="/settings"><SM name="Wards"><SettingsWardsPage /></SM></RG>} />
             <Route path="/settings/services" element={<RG path="/settings"><SM name="Services"><SettingsServicesPage /></SM></RG>} />
+            <Route path="/settings/payer-masters" element={<RG path="/settings"><SM name="Payer Masters"><SettingsPayerMastersPage /></SM></RG>} />
             <Route path="/settings/drugs" element={<RG path="/settings"><SM name="Drugs"><SettingsDrugsPage /></SM></RG>} />
             <Route path="/settings/profile" element={<RG path="/settings"><SM name="Profile"><SettingsProfilePage /></SM></RG>} />
             <Route path="/settings/roles" element={<RG path="/settings"><SM name="Roles"><SettingsRolesPage /></SM></RG>} />
@@ -239,9 +264,14 @@ const App = () => (
             <Route path="/settings/report-schedules" element={<RG path="/settings"><SM name="Report Schedules"><SettingsReportSchedulesPage /></SM></RG>} />
             <Route path="/settings/razorpay" element={<RG path="/settings"><SM name="Razorpay"><SettingsRazorpayPage /></SM></RG>} />
             <Route path="/settings/hmis-portal" element={<RG path="/settings"><SM name="HMIS Portal"><SettingsHMISPage /></SM></RG>} />
+            <Route path="/settings/ai-features" element={<RG path="/settings"><SM name="AI Features"><SettingsAIFeaturesPage /></SM></RG>} />
+            <Route path="/settings/inventory" element={<RG path="/settings"><SM name="Inventory Settings"><SettingsInventoryPage /></SM></RG>} />
             <Route path="/settings/gst" element={<RG path="/settings"><SM name="GST"><SettingsGSTPage /></SM></RG>} />
             <Route path="/settings/abdm" element={<RG path="/settings"><SM name="ABDM"><SettingsABDMPage /></SM></RG>} />
             <Route path="/settings/backup" element={<RG path="/settings"><SM name="Backup & Export"><SettingsBackupPage /></SM></RG>} />
+            <Route path="/settings/record-retention" element={<RG path="/settings"><SM name="Record Retention"><SettingsRecordRetentionPage /></SM></RG>} />
+            <Route path="/ims/access-logs" element={<RG path="/settings"><SM name="IMS Access Logs"><IMSAccessLogsPage /></SM></RG>} />
+            <Route path="/settings/change-log" element={<RG path="/settings/change-log"><SM name="Config Change Log"><ConfigChangeLogPage /></SM></RG>} />
             <Route path="/settings/api-keys" element={<RG path="/settings"><SM name="API Keys"><SettingsAPIKeysPage /></SM></RG>} />
             <Route path="/settings/api-hub" element={<RG path="/settings"><SM name="API Hub"><APIConfigHubPage /></SM></RG>} />
             <Route path="/settings/icd-codes" element={<RG path="/settings"><SM name="ICD Codes"><SettingsICDCodesPage /></SM></RG>} />

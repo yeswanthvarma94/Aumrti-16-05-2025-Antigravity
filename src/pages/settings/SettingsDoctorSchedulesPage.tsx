@@ -5,10 +5,31 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Plus, Trash2, Search, Loader2 } from "lucide-react";
+import { Plus, Trash2, Search, Loader2, CalendarCog } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useHospitalId } from "@/hooks/useHospitalId";
+
+const DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function timeToMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
+}
+function minutesToTime(m: number): string {
+  return `${Math.floor(m / 60).toString().padStart(2, "0")}:${(m % 60).toString().padStart(2, "0")}:00`;
+}
+function getDatesInRange(from: string, to: string): string[] {
+  const result: string[] = [];
+  const start = new Date(from + "T00:00:00");
+  const end = new Date(to + "T00:00:00");
+  const cur = new Date(start);
+  while (cur <= end) {
+    result.push(cur.toISOString().slice(0, 10));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return result;
+}
 
 const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -31,6 +52,9 @@ const SettingsDoctorSchedulesPage: React.FC = () => {
   ]);
   const [fee, setFee] = useState("500");
   const [advanceDays, setAdvanceDays] = useState("30");
+  const [genFrom, setGenFrom] = useState("");
+  const [genTo, setGenTo] = useState("");
+  const [generating, setGenerating] = useState(false);
 
   // Load doctors
   useEffect(() => {
@@ -170,6 +194,77 @@ const SettingsDoctorSchedulesPage: React.FC = () => {
     }
   };
 
+  const handleGenerateSlots = async () => {
+    if (!hospitalId || !selected) return;
+    if (!genFrom || !genTo) {
+      toast({ title: "Select a date range", variant: "destructive" });
+      return;
+    }
+    if (new Date(genTo) < new Date(genFrom)) {
+      toast({ title: "End date must be after start date", variant: "destructive" });
+      return;
+    }
+    if (sessions.some((s) => !s.start || !s.end)) {
+      toast({ title: "Save schedule first", description: "All sessions must have valid start/end times.", variant: "destructive" });
+      return;
+    }
+    setGenerating(true);
+    try {
+      const dates = getDatesInRange(genFrom, genTo);
+      const rows: any[] = [];
+
+      for (const dateStr of dates) {
+        const dow = DOW_SHORT[new Date(dateStr + "T00:00:00").getDay()];
+        if (!workingDays.includes(dow)) continue;
+
+        for (const session of sessions) {
+          if (!session.start || !session.end) continue;
+          let mins = timeToMinutes(session.start);
+          const endMins = timeToMinutes(session.end);
+          const dur = session.slotDuration || 15;
+
+          while (mins + dur <= endMins) {
+            rows.push({
+              hospital_id: hospitalId,
+              doctor_id: selected,
+              slot_date: dateStr,
+              slot_time: minutesToTime(mins),
+              slot_duration_mins: dur,
+              max_patients: 1,
+              booked_count: 0,
+              slot_type: "opd",
+              is_blocked: false,
+            });
+            mins += dur;
+          }
+        }
+      }
+
+      if (rows.length === 0) {
+        toast({ title: "No slots to generate", description: "The date range contains no matching working days." });
+        return;
+      }
+
+      // Upsert in batches of 500; ignoreDuplicates keeps existing booked_count intact
+      const BATCH = 500;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const { error } = await (supabase as any)
+          .from("doctor_slots")
+          .upsert(rows.slice(i, i + BATCH), {
+            onConflict: "hospital_id,doctor_id,slot_date,slot_time",
+            ignoreDuplicates: true,
+          });
+        if (error) throw error;
+      }
+
+      toast({ title: `${rows.length} slots generated`, description: `${genFrom} → ${genTo} for ${doctor?.full_name}` });
+    } catch (e: any) {
+      toast({ title: "Failed to generate slots", description: e.message, variant: "destructive" });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   return (
     <SettingsPageWrapper title="Doctor Schedules" hideSave>
       <div className="flex gap-6 -mx-4">
@@ -256,6 +351,32 @@ const SettingsDoctorSchedulesPage: React.FC = () => {
               <Button onClick={handleSave} disabled={saving} className="bg-primary text-primary-foreground">
                 {saving ? <><Loader2 size={14} className="animate-spin mr-2" />Saving...</> : "Save Schedule"}
               </Button>
+
+              {/* ── Generate Slots ── */}
+              <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
+                <div className="flex items-center gap-2">
+                  <CalendarCog size={15} className="text-primary" />
+                  <span className="text-sm font-semibold">Generate Slots for Calendar</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Creates individual time-slot records in the scheduling calendar based on this doctor's working days and session times.
+                  Existing slots (with bookings) are preserved — only new slots are added.
+                </p>
+                <div className="flex gap-3 items-end flex-wrap">
+                  <div>
+                    <Label className="text-xs">From</Label>
+                    <Input type="date" value={genFrom} onChange={(e) => setGenFrom(e.target.value)} className="h-8 w-36 mt-1" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">To</Label>
+                    <Input type="date" value={genTo} onChange={(e) => setGenTo(e.target.value)} className="h-8 w-36 mt-1" />
+                  </div>
+                  <Button onClick={handleGenerateSlots} disabled={generating || !genFrom || !genTo} variant="outline" className="gap-1.5">
+                    {generating ? <Loader2 size={13} className="animate-spin" /> : <CalendarCog size={13} />}
+                    {generating ? "Generating…" : "Generate Slots"}
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </div>

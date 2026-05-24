@@ -55,9 +55,12 @@ const BedMap: React.FC<Props> = ({ beds, selectedBedId, onSelectBed, hospitalId,
       {/* Header */}
       <div className="flex-shrink-0 h-12 px-4 flex items-center justify-between border-b border-slate-100">
         <span className="text-sm font-bold text-slate-900">Bed Map</span>
-        <span className={cn("text-[11px] font-bold px-2.5 py-0.5 rounded-full", occPill)}>
-          {occupied}/{total} Occupied
-        </span>
+        <div className="flex items-center gap-2">
+          <NABHBadge standardCodes={["AAC.3", "AAC.7", "AAC.9", "COP.2"]} />
+          <span className={cn("text-[11px] font-bold px-2.5 py-0.5 rounded-full", occPill)}>
+            {occupied}/{total} Occupied
+          </span>
+        </div>
       </div>
 
       {/* Ward dropdown */}
@@ -112,7 +115,36 @@ const BedMap: React.FC<Props> = ({ beds, selectedBedId, onSelectBed, hospitalId,
                   {bed.status === "occupied" && bed.admission ? (
                     <>
                       <span className="text-[14px] font-bold text-slate-800 leading-none">{bed.admission.patient_initials}</span>
-                      <span className="text-[9px] text-slate-500">Day {bed.admission.los_days}</span>
+                      <div className="flex items-center gap-0.5 flex-wrap justify-center">
+                        <span className="text-[9px] text-slate-500">Day {bed.admission.los_days}</span>
+                        {bed.admission.is_mlc && (
+                          <span className="text-[8px] bg-red-600 text-white px-1 py-px rounded font-bold leading-none">MLC</span>
+                        )}
+                        {bed.admission.payer_type && bed.admission.payer_type !== "cash" && (
+                          <span className={cn(
+                            "text-[8px] px-1 py-px rounded font-bold leading-none",
+                            bed.admission.payer_type === "corporate" ? "bg-blue-600 text-white" :
+                            bed.admission.payer_type === "tpa" ? "bg-purple-600 text-white" :
+                            bed.admission.payer_type === "pmjay" ? "bg-green-600 text-white" :
+                            bed.admission.payer_type === "cghs" ? "bg-teal-600 text-white" :
+                            bed.admission.payer_type === "esi" ? "bg-orange-600 text-white" :
+                            bed.admission.payer_type === "state_scheme" ? "bg-indigo-600 text-white" :
+                            "bg-slate-500 text-white"
+                          )}>
+                            {bed.admission.payer_type === "corporate" ? "Corp" :
+                             bed.admission.payer_type === "tpa" ? "TPA" :
+                             bed.admission.payer_type === "pmjay" ? "PMJAY" :
+                             bed.admission.payer_type === "cghs" ? "CGHS" :
+                             bed.admission.payer_type === "esi" ? "ESI" :
+                             bed.admission.payer_type === "state_scheme" ? "State" :
+                             bed.admission.payer_type === "credit" ? "Cr" : "Oth"}
+                          </span>
+                        )}
+                        {bed.admission.abha_id
+                          ? <span className="text-[8px] bg-emerald-100 text-emerald-700 px-1 py-px rounded font-bold leading-none">ABHA✓</span>
+                          : <span className="text-[8px] bg-slate-100 text-slate-400 px-1 py-px rounded font-medium leading-none">No ABHA</span>
+                        }
+                      </div>
                     </>
                   ) : bed.status === "available" ? (
                     <Plus className="h-5 w-5 text-green-500" />

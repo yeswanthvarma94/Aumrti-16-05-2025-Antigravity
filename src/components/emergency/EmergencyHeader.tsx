@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import NABHBadge from "@/components/nabh/NABHBadge";
 
 interface Props {
   onCodeBlue: () => void;
@@ -34,6 +35,8 @@ const EmergencyHeader: React.FC<Props> = ({ onCodeBlue }) => {
         </div>
 
         <div className="flex-1" />
+
+        <NABHBadge standardCodes={["AAC.1", "COP.3", "COP.13"]} />
 
         <button
           onClick={() => setShowConfirm(true)}

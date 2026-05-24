@@ -2,10 +2,15 @@ import React, { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Mic } from "lucide-react";
 import type { EncounterData } from "../ConsultationWorkspace";
+import DiagnosisPanel from "../DiagnosisPanel";
 
 interface Props {
   encounter: EncounterData;
   onChange: (partial: Partial<EncounterData>) => void;
+  encounterId?: string | null;
+  hospitalId?: string | null;
+  patientId?: string | null;
+  userId?: string | null;
 }
 
 const GEN_EXAM_CHIPS = [
@@ -21,7 +26,7 @@ const DIAG_CHIPS = [
   "Urinary Tract Infection", "Bronchial Asthma", "Anaemia",
 ];
 
-const ExaminationTab: React.FC<Props> = ({ encounter, onChange }) => {
+const ExaminationTab: React.FC<Props> = ({ encounter, onChange, encounterId, hospitalId, patientId, userId }) => {
   const [recording, setRecording] = useState(false);
 
   const appendToExam = (text: string) => {
@@ -88,34 +93,14 @@ const ExaminationTab: React.FC<Props> = ({ encounter, onChange }) => {
         </div>
       </div>
 
-      {/* Diagnosis */}
-      <div className="flex-shrink-0 pt-2 border-t border-slate-100">
-        <label className="text-xs font-bold text-slate-700 mb-1 block">Diagnosis / Impression</label>
-        <div className="flex gap-2">
-          <input
-            value={encounter.diagnosis}
-            onChange={(e) => onChange({ diagnosis: e.target.value })}
-            placeholder="Type diagnosis..."
-            className="flex-1 h-9 px-3 border border-slate-200 rounded-lg text-sm outline-none focus:border-[#1A2F5A]"
-          />
-          <div className="flex items-center gap-1">
-            <span className="text-[11px] text-slate-500">ICD-10:</span>
-            <input
-              value={encounter.icd10_code}
-              onChange={(e) => onChange({ icd10_code: e.target.value })}
-              placeholder="e.g., J06.9"
-              className="w-24 h-9 px-2 border border-slate-200 rounded-lg text-sm outline-none"
-            />
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-1 mt-2">
-          {DIAG_CHIPS.map((d) => (
-            <button key={d} onClick={() => onChange({ diagnosis: d })} className="text-[11px] px-2.5 py-0.5 rounded-full bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors">
-              {d}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Multi-Diagnosis Panel */}
+      <DiagnosisPanel
+        encounterId={encounterId ?? null}
+        hospitalId={hospitalId ?? null}
+        patientId={patientId ?? null}
+        userId={userId ?? null}
+        onPrimaryChange={(diagnosis, icd10_code) => onChange({ diagnosis, icd10_code })}
+      />
     </div>
   );
 };

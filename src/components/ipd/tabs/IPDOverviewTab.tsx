@@ -344,6 +344,8 @@ const IPDOverviewTab: React.FC<Props> = ({ admissionId, hospitalId, onTabChange,
       <SepsisWarningBanner
         news2Score={latestVitals?.news2_score ?? null}
         admissionId={admissionId}
+        hospitalId={hospitalId}
+        currentDiagnosis={admDiagnosis || null}
         onTabChange={onTabChange}
       />
       <div className="grid grid-cols-2 gap-3">

@@ -12,6 +12,10 @@ import CommandPalette from "./CommandPalette";
 import IdleTimer from "@/components/auth/IdleTimer";
 import { usePWAInstall } from "@/hooks/usePWAInstall";
 import { Download, X } from "lucide-react";
+import ReportEventModal from "@/components/safety/ReportEventModal";
+import IncidentFAB from "@/components/safety/IncidentFAB";
+import CredentialExpiryBanner from "./CredentialExpiryBanner";
+import { CredentialAlertProvider } from "@/contexts/CredentialAlertContext";
 
 const PWAInstallBanner: React.FC = () => {
   const { canInstall, promptInstall } = usePWAInstall();
@@ -90,6 +94,9 @@ const ShellContent: React.FC = () => {
 
       {isMobile && <MobileTabBar />}
       <VoiceScribePanel />
+      <ReportEventModal />
+      <IncidentFAB />
+      <CredentialExpiryBanner />
       <PWAInstallBanner />
     </div>
   );
@@ -98,7 +105,9 @@ const ShellContent: React.FC = () => {
 const AppShell: React.FC = () => (
   <VoiceScribeProvider>
     <SidebarProvider>
-      <ShellContent />
+      <CredentialAlertProvider>
+        <ShellContent />
+      </CredentialAlertProvider>
     </SidebarProvider>
   </VoiceScribeProvider>
 );

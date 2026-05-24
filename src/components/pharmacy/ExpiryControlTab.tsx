@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { AlertTriangle, Download, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Download, RefreshCw, Trash2, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +20,7 @@ interface BatchRow {
 }
 
 type ExpiryGroup = "expired" | "critical" | "warning" | "ok";
+type ActiveFilter = ExpiryGroup | "all" | "quarantined";
 
 function getGroup(expiryDate: string): ExpiryGroup {
   const today = new Date();
@@ -53,38 +54,52 @@ interface Props {
 
 const ExpiryControlTab: React.FC<Props> = ({ hospitalId }) => {
   const [batches, setBatches] = useState<BatchRow[]>([]);
+  const [quarantinedBatches, setQuarantinedBatches] = useState<BatchRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [activeGroup, setActiveGroup] = useState<ExpiryGroup | "all">("all");
+  const [activeGroup, setActiveGroup] = useState<ActiveFilter>("all");
+
+  const mapRow = (b: any): BatchRow => ({
+    id: b.id,
+    batch_number: b.batch_number,
+    expiry_date: b.expiry_date,
+    quantity_available: b.quantity_available,
+    cost_price: b.cost_price,
+    drug_name: b.drug_master?.brand_name || b.drug_master?.generic_name || "Unknown",
+    manufacturer: b.manufacturer,
+    supplier_name: b.supplier_name,
+  });
 
   const fetch = useCallback(async () => {
     setLoading(true);
     const ninetyDaysOut = new Date();
     ninetyDaysOut.setDate(ninetyDaysOut.getDate() + 90);
 
-    const { data, error } = await (supabase as any)
-      .from("drug_batches")
-      .select("id, batch_number, expiry_date, quantity_available, cost_price, manufacturer, supplier_name, drug_master(generic_name, brand_name)")
-      .eq("hospital_id", hospitalId)
-      .gt("quantity_available", 0)
-      .lte("expiry_date", ninetyDaysOut.toISOString().split("T")[0])
-      .order("expiry_date", { ascending: true })
-      .limit(300);
+    const [expiryRes, quarantineRes] = await Promise.all([
+      (supabase as any)
+        .from("drug_batches")
+        .select("id, batch_number, expiry_date, quantity_available, cost_price, manufacturer, supplier_name, drug_master(generic_name, brand_name)")
+        .eq("hospital_id", hospitalId)
+        .neq("status", "quarantined")
+        .neq("status", "destroyed")
+        .gt("quantity_available", 0)
+        .lte("expiry_date", ninetyDaysOut.toISOString().split("T")[0])
+        .order("expiry_date", { ascending: true })
+        .limit(300),
+      (supabase as any)
+        .from("drug_batches")
+        .select("id, batch_number, expiry_date, quantity_available, cost_price, manufacturer, supplier_name, drug_master(generic_name, brand_name)")
+        .eq("hospital_id", hospitalId)
+        .eq("status", "quarantined")
+        .eq("is_active", true)
+        .order("expiry_date", { ascending: true })
+        .limit(200),
+    ]);
 
-    if (error) { toast.error(error.message); setLoading(false); return; }
+    if (expiryRes.error) { toast.error(expiryRes.error.message); setLoading(false); return; }
 
-    const rows: BatchRow[] = (data || []).map((b: any) => ({
-      id: b.id,
-      batch_number: b.batch_number,
-      expiry_date: b.expiry_date,
-      quantity_available: b.quantity_available,
-      cost_price: b.cost_price,
-      drug_name: b.drug_master?.brand_name || b.drug_master?.generic_name || "Unknown",
-      manufacturer: b.manufacturer,
-      supplier_name: b.supplier_name,
-    }));
-
-    setBatches(rows);
+    setBatches((expiryRes.data || []).map(mapRow));
+    setQuarantinedBatches((quarantineRes.data || []).map(mapRow));
     setLoading(false);
   }, [hospitalId]);
 
@@ -100,6 +115,13 @@ const ExpiryControlTab: React.FC<Props> = ({ hospitalId }) => {
     expired: batches.filter(b => getGroup(b.expiry_date) === "expired").length,
     critical: batches.filter(b => getGroup(b.expiry_date) === "critical").length,
     warning: batches.filter(b => getGroup(b.expiry_date) === "warning").length,
+    quarantined: quarantinedBatches.length,
+  };
+
+  const markDestroyed = async (batchId: string, drugName: string) => {
+    await (supabase as any).from("drug_batches").update({ status: "destroyed", quantity_available: 0 }).eq("id", batchId);
+    toast.success(`${drugName} marked as destroyed`);
+    fetch();
   };
 
   const exportCSV = () => {
@@ -174,6 +196,15 @@ const ExpiryControlTab: React.FC<Props> = ({ hospitalId }) => {
               {g === "expired" ? "🔴" : g === "critical" ? "🟠" : "🟡"} {GROUP_CONFIG[g].label} ({counts[g]})
             </button>
           ))}
+          <button
+            onClick={() => setActiveGroup("quarantined")}
+            className={cn("px-3 py-1 rounded-full text-xs font-medium border transition-colors",
+              activeGroup === "quarantined"
+                ? "bg-purple-100 text-purple-700 border-purple-300"
+                : "border-border hover:bg-muted")}
+          >
+            🔒 Quarantined ({counts.quarantined})
+          </button>
           <Input
             placeholder="Search drug or batch..."
             value={search}
@@ -187,6 +218,57 @@ const ExpiryControlTab: React.FC<Props> = ({ hospitalId }) => {
       <ScrollArea className="flex-1">
         {loading ? (
           <p className="text-center py-12 text-muted-foreground text-sm">Loading expiry data...</p>
+        ) : activeGroup === "quarantined" ? (
+          quarantinedBatches.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <ShieldAlert className="h-8 w-8 mx-auto mb-2 text-purple-400" />
+              <p className="text-sm font-medium">No quarantined stock</p>
+            </div>
+          ) : (
+            <>
+              <div className="px-4 py-2 bg-purple-50 dark:bg-purple-950/20 border-b text-xs text-purple-700 font-medium flex items-center gap-1.5">
+                <ShieldAlert className="h-3.5 w-3.5" />
+                Quarantined stock — not available for dispensing. Mark as Destroyed when disposal is complete.
+              </div>
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50 sticky top-0">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-semibold text-muted-foreground">Drug Name</th>
+                    <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Batch #</th>
+                    <th className="text-left px-3 py-2 font-semibold text-muted-foreground">Expiry</th>
+                    <th className="text-center px-3 py-2 font-semibold text-muted-foreground">Qty</th>
+                    <th className="text-right px-3 py-2 font-semibold text-muted-foreground">Value (₹)</th>
+                    <th className="text-right px-4 py-2 font-semibold text-muted-foreground">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quarantinedBatches
+                    .filter(b => !search || b.drug_name.toLowerCase().includes(search.toLowerCase()) || b.batch_number.toLowerCase().includes(search.toLowerCase()))
+                    .map(b => (
+                      <tr key={b.id} className="border-b hover:bg-muted/30 transition-colors bg-purple-50/40 dark:bg-purple-950/10">
+                        <td className="px-4 py-2 font-medium">{b.drug_name}</td>
+                        <td className="px-3 py-2 font-mono text-muted-foreground">{b.batch_number}</td>
+                        <td className="px-3 py-2">{new Date(b.expiry_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" })}</td>
+                        <td className="px-3 py-2 text-center font-medium">{b.quantity_available}</td>
+                        <td className="px-3 py-2 text-right text-muted-foreground">
+                          {(b.quantity_available * b.cost_price).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 text-[10px] px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => markDestroyed(b.id, b.drug_name)}
+                          >
+                            <Trash2 className="h-3 w-3 mr-1" /> Mark Destroyed
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </>
+          )
         ) : filtered.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-emerald-500" />

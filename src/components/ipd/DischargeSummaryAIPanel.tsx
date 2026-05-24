@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useAIAudit } from "@/hooks/useAIAudit";
+import { useAIFeatureFlag } from "@/hooks/useAIFeatureFlag";
+import AIAttestationModal from "@/components/ai/AIAttestationModal";
 import { cn } from "@/lib/utils";
 
 interface DischargeMed {
@@ -38,10 +40,12 @@ interface Props {
 
 const DischargeSummaryAIPanel: React.FC<Props> = ({ admissionId, hospitalId, patientId }) => {
   const { logAudit } = useAIAudit();
+  const dischargeSummaryEnabled = useAIFeatureFlag("discharge_summary");
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<StructuredSummary | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [actioned, setActioned] = useState(false);
+  const [showAttestation, setShowAttestation] = useState(false);
 
   const generate = async () => {
     setLoading(true);
@@ -62,6 +66,11 @@ const DischargeSummaryAIPanel: React.FC<Props> = ({ admissionId, hospitalId, pat
 
   const handleAccept = async () => {
     if (!summary) return;
+    setShowAttestation(true);
+  };
+
+  const finalizeAccept = async () => {
+    if (!summary) return;
     await logAudit(
       {
         hospitalId,
@@ -75,6 +84,7 @@ const DischargeSummaryAIPanel: React.FC<Props> = ({ admissionId, hospitalId, pat
     );
     toast.success("Structured summary accepted and logged");
     setActioned(true);
+    setShowAttestation(false);
   };
 
   const handleDismiss = async () => {
@@ -104,6 +114,28 @@ const DischargeSummaryAIPanel: React.FC<Props> = ({ admissionId, hospitalId, pat
       : summary.confidence >= 0.6 ? "bg-amber-100 text-amber-700"
       : "bg-red-100 text-red-700"
     : "";
+
+  if (!dischargeSummaryEnabled) {
+    return (
+      <div className="border rounded-lg px-3 py-2.5 bg-muted/30 flex items-center gap-2">
+        <Bot className="h-4 w-4 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">AI Discharge Summary is disabled by your administrator.</span>
+      </div>
+    );
+  }
+
+  const summaryPreviewText = summary ? [
+    `Final Diagnosis: ${summary.final_diagnosis}`,
+    summary.procedures_performed?.length > 0 ? `Procedures: ${summary.procedures_performed.join(", ")}` : "",
+    `Hospital Course:\n${summary.hospital_course}`,
+    summary.discharge_medications?.length > 0
+      ? `Medications:\n${summary.discharge_medications.map(m => `  ${m.drug} ${m.dose} ${m.frequency} × ${m.duration}`).join("\n")}`
+      : "",
+    `Diet: ${summary.diet_instructions}`,
+    `Activity: ${summary.activity_restrictions}`,
+    summary.follow_up_appointments?.length > 0 ? `Follow-up: ${summary.follow_up_appointments.join("; ")}` : "",
+    summary.red_flag_symptoms?.length > 0 ? `Return if: ${summary.red_flag_symptoms.join(", ")}` : "",
+  ].filter(Boolean).join("\n\n") : "";
 
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -245,6 +277,22 @@ const DischargeSummaryAIPanel: React.FC<Props> = ({ admissionId, hospitalId, pat
             <p className="text-xs text-emerald-600 font-medium">✓ Summary accepted and logged</p>
           )}
         </div>
+      )}
+
+      {summary && (
+        <AIAttestationModal
+          open={showAttestation}
+          title="AI Discharge Summary — Doctor Attestation Required"
+          feature="discharge_summary"
+          sourceId={admissionId}
+          hospitalId={hospitalId}
+          aiOutput={summary as unknown as Record<string, unknown>}
+          previewContent={summaryPreviewText}
+          initialEditableText={summary.patient_friendly_summary || ""}
+          editableLabel="Patient-Friendly Summary (edit before saving)"
+          onAccept={() => finalizeAccept()}
+          onDiscard={() => setShowAttestation(false)}
+        />
       )}
     </div>
   );

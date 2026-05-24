@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { BarChart3, Target, CalendarDays, AlertTriangle, RefreshCw, Bug, FlaskConical, Archive } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { BarChart3, Target, CalendarDays, AlertTriangle, RefreshCw, Bug, FlaskConical, Archive, ClipboardCheck, ShieldAlert, ClipboardList, TrendingUp, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -26,6 +27,7 @@ const navTabs = [
 ];
 
 const QualityPage: React.FC = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("nabh");
   const [incidentModalOpen, setIncidentModalOpen] = useState(false);
   const [auditModalOpen, setAuditModalOpen] = useState(false);
@@ -128,6 +130,48 @@ const QualityPage: React.FC = () => {
               <span className="flex-1">{tab.label}</span>
             </button>
           ))}
+          <div className="mt-auto border-t border-border">
+            <button
+              onClick={() => navigate("/quality/events")}
+              className="h-11 flex items-center gap-3 px-4 text-sm transition-colors text-left w-full text-muted-foreground hover:bg-muted/50 hover:text-primary"
+            >
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              <span className="flex-1">Events & Incidents</span>
+              <span className="text-[10px] bg-primary/10 text-primary rounded px-1">→</span>
+            </button>
+            <button
+              onClick={() => navigate("/nabh/compliance")}
+              className="h-11 flex items-center gap-3 px-4 text-sm transition-colors text-left w-full text-muted-foreground hover:bg-muted/50 hover:text-primary"
+            >
+              <ClipboardCheck className="h-4 w-4 shrink-0" />
+              <span className="flex-1">NABH Matrix</span>
+              <span className="text-[10px] bg-primary/10 text-primary rounded px-1">→</span>
+            </button>
+            <button
+              onClick={() => navigate("/quality/clinical-audits")}
+              className="h-11 flex items-center gap-3 px-4 text-sm transition-colors text-left w-full text-muted-foreground hover:bg-muted/50 hover:text-primary"
+            >
+              <ClipboardList className="h-4 w-4 shrink-0" />
+              <span className="flex-1">Clinical Audits</span>
+              <span className="text-[10px] bg-primary/10 text-primary rounded px-1">→</span>
+            </button>
+            <button
+              onClick={() => navigate("/quality/qi-projects")}
+              className="h-11 flex items-center gap-3 px-4 text-sm transition-colors text-left w-full text-muted-foreground hover:bg-muted/50 hover:text-primary"
+            >
+              <TrendingUp className="h-4 w-4 shrink-0" />
+              <span className="flex-1">QI Projects</span>
+              <span className="text-[10px] bg-primary/10 text-primary rounded px-1">→</span>
+            </button>
+            <button
+              onClick={() => navigate("/quality/committees")}
+              className="h-11 flex items-center gap-3 px-4 text-sm transition-colors text-left w-full text-muted-foreground hover:bg-muted/50 hover:text-primary"
+            >
+              <Building2 className="h-4 w-4 shrink-0" />
+              <span className="flex-1">Committees</span>
+              <span className="text-[10px] bg-primary/10 text-primary rounded px-1">→</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden">

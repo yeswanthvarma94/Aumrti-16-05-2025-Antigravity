@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { logConfigChange } from "@/lib/ims";
 
 /* ───── Module definitions ───── */
 const MODULES = [
@@ -156,6 +157,7 @@ const SettingsRolesPage: React.FC = () => {
   const [createPickerOpen, setCreatePickerOpen] = useState(false);
   const [pickerRole, setPickerRole] = useState<string>("");
   const [pickerLabel, setPickerLabel] = useState<string>("");
+  const [changeReason, setChangeReason] = useState("");
 
   /* ── Fetch roles ── */
   const { data: roles = [] } = useQuery({
@@ -214,6 +216,7 @@ const SettingsRolesPage: React.FC = () => {
     mutationFn: async () => {
       if (!selectedRole || !matrix) return;
       const perms = serializePermissions(matrix);
+      const oldPerms = selectedRole.permissions;
       const { error } = await supabase
         .from("role_permissions")
         .update({
@@ -222,9 +225,11 @@ const SettingsRolesPage: React.FC = () => {
         } as any)
         .eq("id", selectedRole.id);
       if (error) throw error;
+      logConfigChange({ hospitalId, configArea: "role_permissions", itemId: selectedRole.id, oldValue: oldPerms, newValue: perms, reason: changeReason || null });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["role-permissions"] });
+      setChangeReason("");
       toast({ title: "Permissions saved" });
     },
     onError: () => toast({ title: "Failed to save", variant: "destructive" }),
@@ -539,6 +544,12 @@ const SettingsRolesPage: React.FC = () => {
                     <Trash2 size={14} /> Delete
                   </Button>
                 )}
+                <Input
+                  value={changeReason}
+                  onChange={e => setChangeReason(e.target.value)}
+                  placeholder="Reason for change…"
+                  className="h-8 text-xs w-44"
+                />
                 <Button size="sm" className="gap-1" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
                   <Save size={14} /> Save
                 </Button>

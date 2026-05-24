@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Package, ClipboardList, FileText, PackageCheck, Building2, BarChart3, Brain } from "lucide-react";
+import { Package, ClipboardList, FileText, PackageCheck, Building2, BarChart3, Brain, Warehouse, PieChart } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -10,13 +10,17 @@ import GRNPanel from "@/components/inventory/GRNPanel";
 import VendorsPanel from "@/components/inventory/VendorsPanel";
 import ReportsPanel from "@/components/inventory/ReportsPanel";
 import InventoryDemandReview from "@/components/inventory/InventoryDemandReview";
+import WardStorePanel from "@/components/inventory/WardStorePanel";
+import InventoryMISPanel from "@/components/inventory/InventoryMISPanel";
 
 const navTabs = [
   { id: "stock", label: "Stock Overview", icon: Package },
   { id: "indents", label: "Indents", icon: ClipboardList },
+  { id: "ward_store", label: "Ward Store", icon: Warehouse },
   { id: "po", label: "Purchase Orders", icon: FileText },
   { id: "grn", label: "GRN / Receipts", icon: PackageCheck },
   { id: "vendors", label: "Vendors", icon: Building2 },
+  { id: "mis", label: "MIS Dashboard", icon: PieChart },
   { id: "reports", label: "Reports", icon: BarChart3 },
 ];
 
@@ -75,9 +79,11 @@ const InventoryPage: React.FC = () => {
     switch (activeTab) {
       case "stock": return <StockOverview />;
       case "indents": return <IndentsPanel />;
+      case "ward_store": return hospitalId ? <WardStorePanel hospitalId={hospitalId} /> : null;
       case "po": return <PurchaseOrdersPanel />;
       case "grn": return <GRNPanel />;
       case "vendors": return <VendorsPanel />;
+      case "mis": return hospitalId ? <InventoryMISPanel hospitalId={hospitalId} /> : null;
       case "reports": return <ReportsPanel />;
       default: return <StockOverview />;
     }

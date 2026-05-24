@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import EmptyState from "@/components/EmptyState";
+import NABHBadge from "@/components/nabh/NABHBadge";
 import WalkInModal from "./WalkInModal";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared";
@@ -184,6 +185,8 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
           <span className="text-[11px] text-amber-500 font-medium">● {waitingCount} Waiting</span>
           <span className="text-[11px] text-blue-500 font-medium">● {inRoomCount} In Room</span>
           <span className="text-[11px] text-emerald-500 font-medium">✓ {doneCount} Done</span>
+          <div className="ml-auto" />
+          <NABHBadge standardCodes={["AAC.1", "AAC.2", "AAC.3"]} />
         </div>
 
         {/* Token list */}
@@ -236,6 +239,30 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
                       {(token as any).visit_type === "followup" && <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-violet-100 text-violet-700">[F]</span>}
                       {(token as any).visit_type === "emergency" && <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-red-100 text-red-700">[E]</span>}
                       {(token as any).is_mlc && <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-red-600 text-white">MLC</span>}
+                      {token.patient?.abha_id
+                        ? <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-emerald-100 text-emerald-700">ABHA ✓</span>
+                        : <span className="text-[9px] px-1.5 py-px rounded-full font-medium bg-slate-100 text-slate-400">No ABHA</span>
+                      }
+                      {(token as any).payer_type && (token as any).payer_type !== "cash" && (
+                        <span className={cn(
+                          "text-[9px] px-1.5 py-px rounded-full font-bold",
+                          (token as any).payer_type === "corporate" ? "bg-blue-600 text-white" :
+                          (token as any).payer_type === "tpa" ? "bg-purple-600 text-white" :
+                          (token as any).payer_type === "pmjay" ? "bg-green-600 text-white" :
+                          (token as any).payer_type === "cghs" ? "bg-teal-600 text-white" :
+                          (token as any).payer_type === "esi" ? "bg-orange-600 text-white" :
+                          (token as any).payer_type === "state_scheme" ? "bg-indigo-600 text-white" :
+                          "bg-slate-500 text-white"
+                        )}>
+                          {(token as any).payer_type === "corporate" ? "Corp" :
+                           (token as any).payer_type === "tpa" ? "TPA" :
+                           (token as any).payer_type === "pmjay" ? "PMJAY" :
+                           (token as any).payer_type === "cghs" ? "CGHS" :
+                           (token as any).payer_type === "esi" ? "ESI" :
+                           (token as any).payer_type === "state_scheme" ? "State" :
+                           (token as any).payer_type === "credit" ? "Credit" : "Other"}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center justify-between mt-1">

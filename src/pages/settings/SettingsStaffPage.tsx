@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import StaffPrivilegesPanel from "@/components/hr/StaffPrivilegesPanel";
 
 /* ─── Types ─── */
 type AppRole = string;
@@ -108,6 +109,7 @@ const SettingsStaffPage: React.FC = () => {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [creatingLogin, setCreatingLogin] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<"profile" | "privileges">("profile");
 
   /* ─── Queries ─── */
   const { data: users, isLoading } = useQuery({
@@ -518,7 +520,7 @@ const SettingsStaffPage: React.FC = () => {
     setDrawerOpen(true);
   };
 
-  const closeDrawer = () => { setDrawerOpen(false); setEditingId(null); setForm({ ...EMPTY_FORM }); };
+  const closeDrawer = () => { setDrawerOpen(false); setEditingId(null); setForm({ ...EMPTY_FORM }); setDrawerTab("profile"); };
 
   const initials = (name: string) => name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 
@@ -663,12 +665,45 @@ const SettingsStaffPage: React.FC = () => {
       {drawerOpen && (
         <>
           <div className="fixed inset-0 bg-black/20 z-40" onClick={closeDrawer} />
-          <div className="fixed right-0 top-0 bottom-0 w-full sm:w-[420px] bg-card border-l border-border z-50 flex flex-col shadow-xl animate-in slide-in-from-right duration-200">
+          <div className={cn(
+            "fixed right-0 top-0 bottom-0 w-full bg-card border-l border-border z-50 flex flex-col shadow-xl animate-in slide-in-from-right duration-200",
+            editingId && drawerTab === "privileges" ? "sm:w-[560px]" : "sm:w-[420px]"
+          )}>
             <div className="flex-shrink-0 px-6 py-4 border-b border-border flex items-center justify-between">
-              <h2 className="text-lg font-bold text-foreground">{editingId ? "Edit Staff Member" : "Add Staff Member"}</h2>
+              <h2 className="text-lg font-bold text-foreground">
+                {editingId ? (form.full_name || "Edit Staff Member") : "Add Staff Member"}
+              </h2>
               <button onClick={closeDrawer} className="text-muted-foreground hover:text-foreground active:scale-95"><X size={18} /></button>
             </div>
 
+            {editingId && (
+              <div className="flex-shrink-0 flex border-b border-border">
+                {([
+                  { id: "profile" as const, label: "Profile" },
+                  { id: "privileges" as const, label: "Privileges" },
+                ] as const).map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setDrawerTab(t.id)}
+                    className={cn(
+                      "flex-1 py-2.5 text-sm font-medium transition-colors border-b-2",
+                      drawerTab === t.id
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {editingId && drawerTab === "privileges" ? (
+              <div className="flex-1 overflow-hidden min-h-0">
+                <StaffPrivilegesPanel userId={editingId} staffName={form.full_name} />
+              </div>
+            ) : (
+            <>
             <div className="flex-1 overflow-y-auto min-h-0 px-6 py-5 space-y-5">
               {/* Role selection */}
               <div>
@@ -862,6 +897,8 @@ const SettingsStaffPage: React.FC = () => {
                 {saveStaff.isPending ? "Saving..." : editingId ? "Update Staff Member" : "Save Staff Member"}
               </button>
             </div>
+            </>
+            )}
           </div>
         </>
       )}

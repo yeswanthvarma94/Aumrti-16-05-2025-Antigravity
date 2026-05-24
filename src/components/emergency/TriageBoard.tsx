@@ -102,7 +102,9 @@ const TriageBoard: React.FC<Props> = ({ visits, selectedId, onSelect, onRegister
                         )}
                         <div className="flex items-center gap-1 mt-1">
                           {v.mlc && (
-                            <span className="text-[9px] bg-violet-600 text-white px-1.5 py-px rounded-full font-bold">MLC</span>
+                            <span className="text-[9px] bg-red-600 text-white px-1.5 py-px rounded-full font-bold">
+                              {v.mlc_details?.mlc_number || "MLC"}
+                            </span>
                           )}
                           {v.disposition !== "awaiting" && (
                             <span className="text-[9px] bg-slate-600 text-slate-300 px-1.5 py-px rounded-full capitalize">{v.disposition}</span>

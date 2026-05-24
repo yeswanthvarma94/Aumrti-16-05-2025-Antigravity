@@ -175,6 +175,29 @@ const BillQueue: React.FC<Props> = ({
                   {bill.patient_name.charAt(0)}
                 </div>
                 <span className="text-[13px] font-bold text-foreground truncate">{bill.patient_name}</span>
+                {bill.is_mlc && (
+                  <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-red-600 text-white flex-shrink-0">MLC</span>
+                )}
+                {bill.payer_type && bill.payer_type !== "cash" && (
+                  <span className={cn(
+                    "text-[9px] px-1.5 py-px rounded-full font-bold flex-shrink-0",
+                    bill.payer_type === "corporate" ? "bg-blue-600 text-white" :
+                    bill.payer_type === "tpa" ? "bg-purple-600 text-white" :
+                    bill.payer_type === "pmjay" ? "bg-green-600 text-white" :
+                    bill.payer_type === "cghs" ? "bg-teal-600 text-white" :
+                    bill.payer_type === "esi" ? "bg-orange-600 text-white" :
+                    bill.payer_type === "state_scheme" ? "bg-indigo-600 text-white" :
+                    "bg-slate-500 text-white"
+                  )}>
+                    {bill.payer_type === "corporate" ? "Corp" :
+                     bill.payer_type === "tpa" ? "TPA" :
+                     bill.payer_type === "pmjay" ? "PMJAY" :
+                     bill.payer_type === "cghs" ? "CGHS" :
+                     bill.payer_type === "esi" ? "ESI" :
+                     bill.payer_type === "state_scheme" ? "State" :
+                     bill.payer_type === "credit" ? "Credit" : "Other"}
+                  </span>
+                )}
               </div>
               <div className="flex justify-between mt-1">
                 <Badge variant="outline" className="text-[10px] h-5">{bill.bill_type.toUpperCase()}</Badge>

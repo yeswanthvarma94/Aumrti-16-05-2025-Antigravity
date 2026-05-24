@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { X, UserPlus, Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ABHASearchPanel from "@/components/patients/ABHASearchPanel";
 import { getDPDPConsentText } from "@/lib/compliance-checks";
 import AddReferralDoctorModal from "@/components/shared/AddReferralDoctorModal";
 
@@ -432,6 +433,20 @@ const PatientRegistrationModal: React.FC<Props> = ({ onClose, onSuccess, editPat
               )}
             </div>
           </div>
+
+          {/* ABHA Linking panel — edit mode only (requires existing patientId) */}
+          {editPatient && hospitalIdState && (
+            <div className="border border-border rounded-xl p-4 bg-muted/20">
+              <p className="text-[13px] font-semibold text-foreground mb-3">ABHA Linking & Consent</p>
+              <ABHASearchPanel
+                patientId={editPatient.id}
+                hospitalId={hospitalIdState}
+                existingAbhaId={form.abha_id || editPatient.abha_id}
+                onLinked={(abhaId) => set("abha_id", abhaId)}
+                onUnlinked={() => set("abha_id", "")}
+              />
+            </div>
+          )}
 
           {/* ROW 5b: Aadhaar ID */}
           <div>

@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { autoPullAdmissionCharges as autoPullAdmissionChargesUtil } from "@/lib/ipdBilling";
 import { AlertTriangle, Lock } from "lucide-react";
+import NABHBadge from "@/components/nabh/NABHBadge";
 
 import BillQueue from "@/components/billing/BillQueue";
 import BillEditor from "@/components/billing/BillEditor";
@@ -13,6 +14,7 @@ import NewBillModal from "@/components/billing/NewBillModal";
 import AdvanceReceiptModal from "@/components/billing/AdvanceReceiptModal";
 import CollectionsTab from "@/components/billing/tabs/CollectionsTab";
 import PendingCollectionsPanel from "@/components/billing/PendingCollectionsPanel";
+import DiscountApprovalsInbox from "@/components/billing/DiscountApprovalsInbox";
 
 export interface BillRecord {
   id: string;
@@ -40,6 +42,8 @@ export interface BillRecord {
   irn: string | null;
   irn_generated_at: string | null;
   created_at: string;
+  is_mlc?: boolean;
+  payer_type?: string | null;
 }
 
 const BillingPage: React.FC = () => {
@@ -59,6 +63,7 @@ const BillingPage: React.FC = () => {
   const [endDate, setEndDate] = useState("");
   const [dischargeBillCreated, setDischargeBillCreated] = useState(false);
   const [activeTab, setActiveTab] = useState("bills");
+  const [pendingDiscountCount, setPendingDiscountCount] = useState(0);
 
   useEffect(() => {
     const loadHospital = async () => {
@@ -222,7 +227,7 @@ const BillingPage: React.FC = () => {
 
     let query = supabase
       .from("bills")
-      .select("*, patients!inner(full_name, uhid)")
+      .select("*, patients!inner(full_name, uhid), admission:admissions(is_mlc, payer_type)")
       .eq("hospital_id", hospitalId)
       .gte("bill_date", dateStart)
       .lte("bill_date", dateEnd)
@@ -266,6 +271,8 @@ const BillingPage: React.FC = () => {
       irn: b.irn || null,
       irn_generated_at: b.irn_generated_at || null,
       created_at: b.created_at,
+      is_mlc: (b.admission as any)?.is_mlc || false,
+      payer_type: (b.admission as any)?.payer_type || (b as any).payer_type || null,
     }));
 
     // Find active admissions WITHOUT an IPD bill — surface as virtual "Pending IPD" rows
@@ -273,7 +280,7 @@ const BillingPage: React.FC = () => {
     if (statusFilter === "all" || statusFilter === "unpaid") {
       const { data: activeAdms } = await supabase
         .from("admissions")
-        .select("id, admitted_at, admission_number, patient_id, patients!inner(full_name, uhid)")
+        .select("id, admitted_at, admission_number, patient_id, is_mlc, payer_type, patients!inner(full_name, uhid)")
         .eq("hospital_id", hospitalId)
         .eq("status", "active");
 
@@ -317,6 +324,8 @@ const BillingPage: React.FC = () => {
           irn: null,
           irn_generated_at: null,
           created_at: a.admitted_at || new Date().toISOString(),
+          is_mlc: (a as any).is_mlc || false,
+          payer_type: (a as any).payer_type || null,
         }));
     }
 
@@ -327,6 +336,16 @@ const BillingPage: React.FC = () => {
   useEffect(() => {
     fetchBills();
   }, [fetchBills]);
+
+  useEffect(() => {
+    if (!hospitalId) return;
+    (supabase as any)
+      .from("bill_discount_approvals")
+      .select("id", { count: "exact", head: true })
+      .eq("hospital_id", hospitalId)
+      .eq("status", "pending")
+      .then(({ count }: any) => setPendingDiscountCount(count || 0));
+  }, [hospitalId]);
 
   const selectedBill = bills.find((b) => b.id === selectedBillId) || null;
 
@@ -381,7 +400,24 @@ const BillingPage: React.FC = () => {
           )}
           onClick={() => setActiveTab("pending")}
         >🔴 Pending Payments</button>
+        <button
+          className={cn("px-3 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center gap-1.5",
+            activeTab === "approvals" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+          )}
+          onClick={() => setActiveTab("approvals")}
+        >
+          🔐 Approvals
+          {pendingDiscountCount > 0 && (
+            <span className={cn(
+              "text-[10px] px-1.5 py-0.5 rounded-full font-bold min-w-[18px] text-center",
+              activeTab === "approvals" ? "bg-white text-primary" : "bg-amber-500 text-white"
+            )}>
+              {pendingDiscountCount}
+            </span>
+          )}
+        </button>
         <div className="flex-1" />
+        <NABHBadge standardCodes={["ROM.2", "IMS.1", "IMS.3"]} />
         <button
           className={cn(
             "px-3 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center gap-1",
@@ -432,6 +468,19 @@ const BillingPage: React.FC = () => {
         </div>
       ) : activeTab === "collections" ? (
         hospitalId && <CollectionsTab hospitalId={hospitalId} />
+      ) : activeTab === "approvals" ? (
+        <div className="flex-1 overflow-hidden">
+          {hospitalId && (
+            <DiscountApprovalsInbox
+              hospitalId={hospitalId}
+              onBillSelect={(billId) => {
+                setActiveTab("bills");
+                setSelectedBillId(billId);
+                setDateFilter("month");
+              }}
+            />
+          )}
+        </div>
       ) : (
         <div className="flex-1 overflow-auto p-4">
           <PendingCollectionsPanel />

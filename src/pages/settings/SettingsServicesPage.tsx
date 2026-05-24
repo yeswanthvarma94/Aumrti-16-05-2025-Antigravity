@@ -53,6 +53,23 @@ const SettingsServicesPage: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", category: "consultation", fee: "", follow_up_fee: "", gst_applicable: false });
 
+  // Rates by Payer drawer
+  const [payerRatesOpen, setPayerRatesOpen] = useState(false);
+  const [payerRatesService, setPayerRatesService] = useState<{ id: string; name: string; category: string } | null>(null);
+  const [payerRatesData, setPayerRatesData] = useState<Record<string, { rate: string; gst: string; from: string; to: string; rateId?: string }>>({});
+  const [payerRatesSaving, setPayerRatesSaving] = useState(false);
+
+  const PAYER_TYPES_FOR_RATES = [
+    { value: "corporate", label: "Corporate" },
+    { value: "tpa", label: "TPA / Insurance" },
+    { value: "pmjay", label: "PMJAY / Ayushman" },
+    { value: "cghs", label: "CGHS" },
+    { value: "esi", label: "ESI" },
+    { value: "state_scheme", label: "State Scheme" },
+    { value: "credit", label: "Credit / Deferred" },
+    { value: "other", label: "Other" },
+  ];
+
   // Bulk fee
   const [bulkFee, setBulkFee] = useState("");
 
@@ -223,6 +240,60 @@ const SettingsServicesPage: React.FC = () => {
   };
   const closeDrawer = () => { setDrawerOpen(false); setEditingId(null); };
 
+  const openPayerRates = async (service: { id: string; name: string; category: string }) => {
+    setPayerRatesService(service);
+    const { data } = await (supabase as any).from("service_rates")
+      .select("id, payer_type, default_rate, gst_rate, effective_from, effective_to")
+      .eq("item_code", `svc_${service.id}`)
+      .neq("payer_type", "all");
+    const map: Record<string, { rate: string; gst: string; from: string; to: string; rateId?: string }> = {};
+    (data || []).forEach((r: any) => {
+      map[r.payer_type] = {
+        rate: String(r.default_rate ?? ""),
+        gst: String(r.gst_rate ?? "0"),
+        from: r.effective_from || "",
+        to: r.effective_to || "",
+        rateId: r.id,
+      };
+    });
+    setPayerRatesData(map);
+    setPayerRatesOpen(true);
+  };
+
+  const savePayerRates = async () => {
+    if (!payerRatesService) return;
+    setPayerRatesSaving(true);
+    const hid = await getHospitalId();
+    const today = new Date().toISOString().split("T")[0];
+    for (const pt of PAYER_TYPES_FOR_RATES) {
+      const entry = payerRatesData[pt.value];
+      if (!entry || !entry.rate) continue;
+      const payload = {
+        hospital_id: hid,
+        item_code: `svc_${payerRatesService.id}`,
+        item_name: payerRatesService.name,
+        item_type: payerRatesService.category,
+        payer_type: pt.value,
+        default_rate: parseFloat(entry.rate) || 0,
+        gst_rate: parseFloat(entry.gst) || 0,
+        effective_from: entry.from || today,
+        effective_to: entry.to || null,
+        is_active: true,
+      };
+      if (entry.rateId) {
+        await (supabase as any).from("service_rates").update(payload).eq("id", entry.rateId);
+      } else {
+        const { data: inserted } = await (supabase as any).from("service_rates").insert(payload).select("id").maybeSingle();
+        if (inserted) {
+          setPayerRatesData(prev => ({ ...prev, [pt.value]: { ...prev[pt.value], rateId: inserted.id } }));
+        }
+      }
+    }
+    setPayerRatesSaving(false);
+    toast({ title: "Payer rates saved" });
+    qc.invalidateQueries({ queryKey: ["settings-service-rates"] });
+  };;
+
   const procedureCount = services?.filter((s) => s.category === "procedure" || s.category === "radiology").length ?? 0;
 
   return (
@@ -384,7 +455,8 @@ const SettingsServicesPage: React.FC = () => {
                     </td>
                   )}
                   <td className="px-4 py-3 text-muted-foreground text-xs">{s.gst_applicable ? "Yes" : "No"}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right flex items-center justify-end gap-1">
+                    <button onClick={() => openPayerRates({ id: s.id, name: s.name, category: s.category })} className="text-xs text-purple-600 hover:text-purple-800 px-2 py-1 rounded hover:bg-purple-50 font-medium">Rates ↗</button>
                     <button onClick={() => openDrawer(s)} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted">Edit</button>
                   </td>
                 </tr>
@@ -394,6 +466,71 @@ const SettingsServicesPage: React.FC = () => {
         )}
       </div>
       </>
+      )}
+
+      {/* PAYER RATES DRAWER */}
+      {payerRatesOpen && payerRatesService && (
+        <>
+          <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setPayerRatesOpen(false)} />
+          <div className="fixed right-0 top-0 bottom-0 w-[480px] bg-card border-l border-border z-50 flex flex-col shadow-xl animate-in slide-in-from-right duration-200">
+            <div className="flex-shrink-0 px-6 py-4 border-b border-border flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-foreground">Rates by Payer</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">{payerRatesService.name}</p>
+              </div>
+              <button onClick={() => setPayerRatesOpen(false)} className="text-muted-foreground hover:text-foreground"><X size={18} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <p className="text-xs text-muted-foreground mb-4">Set payer-specific rates below. Leave blank to use the standard fee.</p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[11px] text-muted-foreground uppercase tracking-wider text-left">
+                    <th className="pb-2 font-medium">Payer Type</th>
+                    <th className="pb-2 font-medium text-right">Rate (₹)</th>
+                    <th className="pb-2 font-medium text-right">GST %</th>
+                    <th className="pb-2 font-medium text-right">Eff. From</th>
+                    <th className="pb-2 font-medium text-right">Eff. To</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {PAYER_TYPES_FOR_RATES.map((pt) => {
+                    const entry = payerRatesData[pt.value] || { rate: "", gst: "0", from: "", to: "" };
+                    const setEntry = (patch: Partial<typeof entry>) =>
+                      setPayerRatesData(prev => ({ ...prev, [pt.value]: { ...entry, ...patch } }));
+                    return (
+                      <tr key={pt.value} className="border-t border-border/50">
+                        <td className="py-2 pr-2 font-medium text-foreground text-xs">{pt.label}</td>
+                        <td className="py-2 px-1 text-right">
+                          <input type="number" value={entry.rate} onChange={(e) => setEntry({ rate: e.target.value })} placeholder="—"
+                            className="w-20 h-7 text-right text-sm tabular-nums bg-transparent border border-transparent hover:border-input focus:border-input rounded px-1 outline-none" />
+                        </td>
+                        <td className="py-2 px-1 text-right">
+                          <input type="number" value={entry.gst} onChange={(e) => setEntry({ gst: e.target.value })} placeholder="0"
+                            className="w-14 h-7 text-right text-sm tabular-nums text-muted-foreground bg-transparent border border-transparent hover:border-input focus:border-input rounded px-1 outline-none" />
+                        </td>
+                        <td className="py-2 px-1 text-right">
+                          <input type="date" value={entry.from} onChange={(e) => setEntry({ from: e.target.value })}
+                            className="w-28 h-7 text-xs text-right bg-transparent border border-transparent hover:border-input focus:border-input rounded px-1 outline-none" />
+                        </td>
+                        <td className="py-2 pl-1 text-right">
+                          <input type="date" value={entry.to} onChange={(e) => setEntry({ to: e.target.value })}
+                            className="w-28 h-7 text-xs text-right bg-transparent border border-transparent hover:border-input focus:border-input rounded px-1 outline-none" />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex-shrink-0 px-6 py-4 border-t border-border flex gap-3">
+              <button onClick={() => setPayerRatesOpen(false)} className="flex-1 h-11 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:bg-muted active:scale-[0.98]">Cancel</button>
+              <button onClick={savePayerRates} disabled={payerRatesSaving}
+                className="flex-[2] h-11 rounded-lg bg-[hsl(222,55%,23%)] text-white text-sm font-semibold hover:opacity-90 active:scale-[0.97] disabled:opacity-40">
+                {payerRatesSaving ? "Saving..." : "Save Payer Rates"}
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
       {/* DRAWER */}

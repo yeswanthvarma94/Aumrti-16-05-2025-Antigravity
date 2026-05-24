@@ -36,11 +36,17 @@ export interface OTSchedule {
   actual_start_time: string | null;
   actual_end_time: string | null;
   implants_consumables: any;
+  pac_done: boolean | null;
+  pac_done_by: string | null;
+  pac_done_at: string | null;
+  pac_notes: string | null;
+  pac_cleared: boolean | null;
   created_at: string;
   patient?: { full_name: string; uhid: string; blood_group: string | null; allergies: string | null; chronic_conditions: string[] | null; gender: string | null; dob: string | null };
   surgeon?: { full_name: string };
   anaesthetist?: { full_name: string };
   ot_room?: { name: string; type: string };
+  admission?: { is_mlc: boolean | null } | null;
 }
 
 export const formatDateForQuery = (date: Date | string): string => {
@@ -99,7 +105,7 @@ const OTPage: React.FC = () => {
     const dateStr = formatDateForQuery(selectedDate);
     let query = supabase
       .from("ot_schedules")
-      .select("*, patient:patients(full_name, uhid, blood_group, allergies, chronic_conditions, gender, dob), surgeon:users!ot_schedules_surgeon_id_fkey(full_name), anaesthetist:users!ot_schedules_anaesthetist_id_fkey(full_name), ot_room:ot_rooms(name, type)")
+      .select("*, patient:patients(full_name, uhid, blood_group, allergies, chronic_conditions, gender, dob), surgeon:users!ot_schedules_surgeon_id_fkey(full_name), anaesthetist:users!ot_schedules_anaesthetist_id_fkey(full_name), ot_room:ot_rooms(name, type), admission:admissions(is_mlc)")
       .eq("scheduled_date", dateStr)
       .order("scheduled_start_time");
 

@@ -3,7 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { Button } from "@/components/ui/button";
-import { ClipboardPlus, ListChecks, ClipboardList, LayoutDashboard, Tv, X as XIcon, Droplets, ShieldAlert } from "lucide-react";
+import { ClipboardPlus, ListChecks, ClipboardList, LayoutDashboard, Tv, X as XIcon, Droplets, ShieldAlert, Monitor, RefreshCw, AlertTriangle } from "lucide-react";
+import { getNEWS2BadgeClasses, calculateNEWS2 } from "@/lib/news2";
 import NursingTaskList from "@/components/nursing/NursingTaskList";
 import NursingTaskExecution from "@/components/nursing/NursingTaskExecution";
 import NursingProcedureModal from "@/components/nursing/NursingProcedureModal";
@@ -289,6 +290,287 @@ const NursingKanbanView: React.FC<{ tasks: NursingTask[]; loading: boolean; onTa
   );
 };
 
+// ── ICU Monitor ─────────────────────────────────────────────────────────────
+
+interface ICUPatientRow {
+  admissionId: string;
+  patientName: string;
+  bedLabel: string;
+  wardName: string;
+  bedCategory: string;
+  vitals: {
+    bp_systolic: number | null;
+    bp_diastolic: number | null;
+    pulse: number | null;
+    respiratory_rate: number | null;
+    spo2: number | null;
+    temperature: number | null;
+    gcs_total: number | null;
+    news2_score: number | null;
+    mews_score: number | null;
+    on_supplemental_o2: boolean;
+    recorded_at: string | null;
+  } | null;
+  qsofa: number;
+}
+
+function calcQSOFASimple(v: ICUPatientRow["vitals"]): number {
+  if (!v) return 0;
+  return (
+    (v.gcs_total !== null && v.gcs_total < 15 ? 1 : 0) +
+    (v.respiratory_rate !== null && v.respiratory_rate >= 22 ? 1 : 0) +
+    (v.bp_systolic !== null && v.bp_systolic <= 100 ? 1 : 0)
+  );
+}
+
+const ICUMonitor: React.FC<{ hospitalId: string }> = ({ hospitalId }) => {
+  const [patients, setPatients] = React.useState<ICUPatientRow[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [lastRefresh, setLastRefresh] = React.useState(new Date());
+
+  const ICU_BED_CATEGORIES = ["icu", "sicu", "picu", "nicu", "hdu"];
+
+  const fetchICU = React.useCallback(async () => {
+    setLoading(true);
+    const { data: admissions } = await supabase
+      .from("admissions")
+      .select(`
+        id, patient_id,
+        patients!admissions_patient_id_fkey(full_name),
+        beds!admissions_bed_id_fkey(bed_number, bed_category),
+        wards!admissions_ward_id_fkey(name)
+      `)
+      .eq("status", "active")
+      .in("beds.bed_category" as any, ICU_BED_CATEGORIES);
+
+    if (!admissions || admissions.length === 0) { setPatients([]); setLoading(false); return; }
+
+    const admIds = admissions.map((a: any) => a.id);
+
+    const { data: vitalsData } = await (supabase as any)
+      .from("nursing_vitals")
+      .select("admission_id, bp_systolic, bp_diastolic, pulse, respiratory_rate, spo2, temperature, gcs_total, news2_score, mews_score, on_supplemental_o2, recorded_at")
+      .in("admission_id", admIds)
+      .order("recorded_at", { ascending: false });
+
+    // Keep only latest vitals per admission
+    const latestVitals: Record<string, any> = {};
+    for (const v of (vitalsData || [])) {
+      if (!latestVitals[v.admission_id]) latestVitals[v.admission_id] = v;
+    }
+
+    const rows: ICUPatientRow[] = (admissions as any[])
+      .filter((a: any) => ICU_BED_CATEGORIES.includes(a.beds?.bed_category || ""))
+      .map((a: any) => {
+        const v = latestVitals[a.id] || null;
+        return {
+          admissionId: a.id,
+          patientName: a.patients?.full_name || "Unknown",
+          bedLabel: `${a.wards?.name || "—"}-${a.beds?.bed_number || "?"}`,
+          wardName: a.wards?.name || "—",
+          bedCategory: a.beds?.bed_category || "icu",
+          vitals: v,
+          qsofa: calcQSOFASimple(v),
+        };
+      })
+      .sort((a, b) => {
+        // Sort by alert level: qSOFA desc, then NEWS2 desc
+        const aScore = (a.vitals?.news2_score ?? 0) + a.qsofa * 3;
+        const bScore = (b.vitals?.news2_score ?? 0) + b.qsofa * 3;
+        return bScore - aScore;
+      });
+
+    setPatients(rows);
+    setLastRefresh(new Date());
+    setLoading(false);
+  }, [hospitalId]);
+
+  React.useEffect(() => { fetchICU(); }, [fetchICU]);
+
+  // Auto-refresh every 5 minutes
+  React.useEffect(() => {
+    const iv = setInterval(fetchICU, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [fetchICU]);
+
+  // Supabase realtime for nursing_vitals
+  React.useEffect(() => {
+    const ch = supabase.channel("icu-vitals-realtime")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "nursing_vitals" }, () => fetchICU())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [fetchICU]);
+
+  const alertLevel = (row: ICUPatientRow) => {
+    const news2 = row.vitals?.news2_score ?? 0;
+    if (row.qsofa >= 2 || news2 >= 7) return "critical";
+    if (news2 >= 5) return "high";
+    if (news2 >= 3) return "medium";
+    return "low";
+  };
+
+  const ALERT_STYLES = {
+    critical: "border-red-500 bg-red-50 dark:bg-red-950/20",
+    high:     "border-orange-400 bg-orange-50 dark:bg-orange-950/20",
+    medium:   "border-amber-300 bg-amber-50 dark:bg-amber-950/10",
+    low:      "border-border bg-card",
+  };
+  const ALERT_HEADER = {
+    critical: "bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-200",
+    high:     "bg-orange-100 dark:bg-orange-950/40 text-orange-800 dark:text-orange-200",
+    medium:   "bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200",
+    low:      "bg-muted/50 text-muted-foreground",
+  };
+
+  const fmtVital = (v: number | null, unit = "") => v !== null ? `${v}${unit}` : "—";
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 border-b bg-card shrink-0">
+        <div>
+          <p className="text-sm font-bold">ICU Monitor</p>
+          <p className="text-xs text-muted-foreground">
+            {patients.length} patient{patients.length !== 1 ? "s" : ""} · Last refresh: {lastRefresh.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })} · Auto-refreshes every 5 min
+          </p>
+        </div>
+        <button
+          onClick={fetchICU}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-muted"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 px-4 py-1.5 border-b bg-muted/20 text-[10px] text-muted-foreground shrink-0">
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-red-200 border border-red-400 inline-block" /> Critical (qSOFA≥2 / NEWS2≥7)</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-orange-200 border border-orange-400 inline-block" /> High (NEWS2 5–6)</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-100 border border-amber-300 inline-block" /> Medium (NEWS2 3–4)</span>
+        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-card border border-border inline-block" /> Low</span>
+      </div>
+
+      {/* Grid */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading ? (
+          <p className="text-center py-12 text-muted-foreground text-sm">Loading ICU patients…</p>
+        ) : patients.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <Monitor className="h-10 w-10 mx-auto mb-3 text-muted-foreground/30" />
+            <p className="text-sm font-medium">No ICU/HDU patients found</p>
+            <p className="text-xs mt-1">Patients admitted to ICU, SICU, PICU, NICU, or HDU beds will appear here</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {patients.map(row => {
+              const level = alertLevel(row);
+              const v = row.vitals;
+              const minsAgo = v?.recorded_at
+                ? Math.round((Date.now() - new Date(v.recorded_at).getTime()) / 60000)
+                : null;
+              return (
+                <div key={row.admissionId} className={cn("rounded-lg border-2 overflow-hidden", ALERT_STYLES[level])}>
+                  {/* Card header */}
+                  <div className={cn("px-3 py-2 flex items-start justify-between", ALERT_HEADER[level])}>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold truncate">{row.patientName}</p>
+                      <p className="text-[10px] font-medium">{row.bedLabel}</p>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0 ml-2">
+                      {v?.news2_score !== null && v?.news2_score !== undefined && (
+                        <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded", getNEWS2BadgeClasses(v.news2_score))}>
+                          N2:{v.news2_score}
+                        </span>
+                      )}
+                      {row.qsofa >= 2 && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-600 text-white">
+                          qSOFA {row.qsofa}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Vitals grid */}
+                  {v ? (
+                    <div className="px-3 py-2 grid grid-cols-3 gap-1 text-[11px]">
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase font-bold">BP</p>
+                        <p className={cn("font-mono font-medium",
+                          v.bp_systolic !== null && v.bp_systolic <= 100 ? "text-red-600" :
+                          v.bp_systolic !== null && v.bp_systolic > 180 ? "text-amber-600" : "text-foreground")}>
+                          {v.bp_systolic && v.bp_diastolic ? `${v.bp_systolic}/${v.bp_diastolic}` : "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase font-bold">HR</p>
+                        <p className={cn("font-mono font-medium",
+                          v.pulse !== null && (v.pulse < 40 || v.pulse > 130) ? "text-red-600" : "text-foreground")}>
+                          {fmtVital(v.pulse)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase font-bold">SpO₂</p>
+                        <p className={cn("font-mono font-medium",
+                          v.spo2 !== null && v.spo2 < 90 ? "text-red-600 animate-pulse" :
+                          v.spo2 !== null && v.spo2 < 95 ? "text-amber-600" : "text-foreground")}>
+                          {v.spo2 != null ? `${v.spo2}%` : "—"}
+                          {v.on_supplemental_o2 && <span className="text-[9px] text-blue-500 ml-0.5">O₂</span>}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase font-bold">RR</p>
+                        <p className={cn("font-mono font-medium",
+                          v.respiratory_rate !== null && v.respiratory_rate >= 22 ? "text-red-600" :
+                          v.respiratory_rate !== null && v.respiratory_rate <= 8 ? "text-red-600" : "text-foreground")}>
+                          {fmtVital(v.respiratory_rate)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase font-bold">Temp</p>
+                        <p className={cn("font-mono font-medium",
+                          v.temperature !== null && (v.temperature > 38.5 || v.temperature < 35) ? "text-red-600" : "text-foreground")}>
+                          {v.temperature != null ? `${v.temperature}°` : "—"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-muted-foreground uppercase font-bold">GCS</p>
+                        <p className={cn("font-mono font-medium",
+                          v.gcs_total !== null && v.gcs_total < 9 ? "text-red-600" :
+                          v.gcs_total !== null && v.gcs_total < 15 ? "text-amber-600" : "text-foreground")}>
+                          {fmtVital(v.gcs_total, "/15")}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="px-3 py-3 text-[11px] text-muted-foreground italic">No vitals recorded yet</p>
+                  )}
+
+                  {/* Footer: MEWS + time */}
+                  <div className="px-3 pb-2 flex items-center justify-between">
+                    {v?.mews_score != null && (
+                      <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-bold",
+                        v.mews_score >= 5 ? "bg-red-100 text-red-700" :
+                        v.mews_score >= 3 ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700")}>
+                        MEWS {v.mews_score}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground ml-auto">
+                      {minsAgo !== null ? (minsAgo < 60 ? `${minsAgo}m ago` : `${Math.floor(minsAgo / 60)}h ago`) : "No vitals"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── NursingPage ──────────────────────────────────────────────────────────────
 const NursingPage: React.FC = () => {
   const { toast } = useToast();
   const { hospitalId } = useHospitalId();
@@ -299,7 +581,7 @@ const NursingPage: React.FC = () => {
   const [selectedWard, setSelectedWard] = useState<string>("all");
   const [filter, setFilter] = useState<string>("all");
   const [showProcedureModal, setShowProcedureModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<"tasks" | "kanban" | "care_plans" | "io" | "restraints">("tasks");
+  const [activeTab, setActiveTab] = useState<"tasks" | "kanban" | "care_plans" | "io" | "restraints" | "icu_monitor">("tasks");
   const [selectedIOAdmission, setSelectedIOAdmission] = useState<{ admissionId: string; patientName: string } | null>(null);
   const [selectedRestraintAdmission, setSelectedRestraintAdmission] = useState<{ admissionId: string; patientName: string } | null>(null);
   const [tvMode, setTvMode] = useState(false);
@@ -576,6 +858,15 @@ const NursingPage: React.FC = () => {
         >
           <ShieldAlert className="h-3.5 w-3.5" /> Restraints
         </button>
+        <button
+          onClick={() => setActiveTab("icu_monitor")}
+          className={cn(
+            "h-8 px-3 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-colors",
+            activeTab === "icu_monitor" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+          )}
+        >
+          <Monitor className="h-3.5 w-3.5" /> ICU Monitor
+        </button>
         <div className="ml-auto flex gap-2">
           <Button size="sm" variant="outline" onClick={() => setTvMode(true)} title="Ward TV Display">
             <Tv className="h-4 w-4" />
@@ -686,6 +977,12 @@ const NursingPage: React.FC = () => {
               )}
             </div>
           </div>
+        ) : activeTab === "icu_monitor" ? (
+          hospitalId ? <ICUMonitor hospitalId={hospitalId} /> : (
+            <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+              Hospital context not available
+            </div>
+          )
         ) : null}
       </div>
       {showProcedureModal && hospitalId && (

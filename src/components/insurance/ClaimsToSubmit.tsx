@@ -4,9 +4,10 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Send, Bot, Package, AlertTriangle } from "lucide-react";
+import { Send, Bot, Package, AlertTriangle, Plus } from "lucide-react";
 import DenialPredictorPanel from "@/components/insurance/DenialPredictorPanel";
 import ClaimBundleGenerator from "@/components/insurance/ClaimBundleGenerator";
+import ClaimsPackWizard from "@/components/insurance/ClaimsPackWizard";
 import { Checkbox } from "@/components/ui/checkbox";
 
 interface ClaimRow {
@@ -30,6 +31,7 @@ const ClaimsToSubmit: React.FC = () => {
   const [hospitalId, setHospitalId] = useState<string>("");
   const [aiScores, setAiScores] = useState<Record<string, number>>({});
   const [highRiskConfirmed, setHighRiskConfirmed] = useState<Record<string, boolean>>({});
+  const [showWizard, setShowWizard] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => { loadData(); }, []);
@@ -128,6 +130,12 @@ const ClaimsToSubmit: React.FC = () => {
 
   return (
     <div className="h-full overflow-auto p-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm font-semibold text-foreground">Bills ready for claim submission</p>
+        <Button size="sm" className="gap-1.5" onClick={() => setShowWizard(true)}>
+          <Plus size={14} /> New Claim
+        </Button>
+      </div>
       <div className="bg-background rounded-lg border border-border">
         <Table>
           <TableHeader>
@@ -244,6 +252,12 @@ const ClaimsToSubmit: React.FC = () => {
           onSubmitted={() => { setBundleFor(null); loadData(); }}
         />
       )}
+
+      <ClaimsPackWizard
+        open={showWizard}
+        onClose={() => setShowWizard(false)}
+        onCreated={() => { setShowWizard(false); loadData(); }}
+      />
     </div>
   );
 };

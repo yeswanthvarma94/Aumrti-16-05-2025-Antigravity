@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,17 +10,24 @@ interface Props {
   hospitalId: string;
   onClose: () => void;
   onCreated: () => void;
+  prefilledPatient?: { id: string; full_name: string; uhid: string } | null;
+  prefilledAmount?: number;
 }
 
-const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated }) => {
+const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, prefilledPatient, prefilledAmount }) => {
   const { toast } = useToast();
   const [patientSearch, setPatientSearch] = useState("");
   const [patients, setPatients] = useState<any[]>([]);
-  const [selectedPatient, setSelectedPatient] = useState<any>(null);
-  const [amount, setAmount] = useState("");
+  const [selectedPatient, setSelectedPatient] = useState<any>(prefilledPatient || null);
+  const [amount, setAmount] = useState(prefilledAmount ? String(prefilledAmount) : "");
   const [paymentMode, setPaymentMode] = useState("cash");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (prefilledPatient) setSelectedPatient(prefilledPatient);
+    if (prefilledAmount) setAmount(String(prefilledAmount));
+  }, [prefilledPatient, prefilledAmount]);
 
   const searchPatients = async (q: string) => {
     setPatientSearch(q);
@@ -84,7 +91,9 @@ const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated }
               <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-lg mt-1">
                 <span className="text-sm font-bold">{selectedPatient.full_name}</span>
                 <span className="text-[10px] text-muted-foreground">{selectedPatient.uhid}</span>
-                <button onClick={() => setSelectedPatient(null)} className="ml-auto text-xs text-muted-foreground">Change</button>
+                {!prefilledPatient && (
+                  <button onClick={() => setSelectedPatient(null)} className="ml-auto text-xs text-muted-foreground">Change</button>
+                )}
               </div>
             ) : (
               <>
@@ -105,7 +114,7 @@ const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated }
           </div>
           <div>
             <label className="text-[11px] font-bold uppercase text-muted-foreground">Amount (₹) *</label>
-            <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-9 text-sm mt-1" />
+            <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="h-9 text-sm mt-1" autoFocus={!!prefilledPatient} />
           </div>
           <div>
             <label className="text-[11px] font-bold uppercase text-muted-foreground">Payment Mode</label>

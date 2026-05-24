@@ -6,6 +6,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { sendWATITemplate, shouldAutoSend } from "./whatsapp-send";
+import { translateText } from "./translateUtils";
 
 export interface WhatsAppParams {
   phone: string;
@@ -58,8 +59,9 @@ export async function sendAppointmentConfirmation(opts: {
   date: string;
   time?: string;
   tokenNumber?: string;
+  patientLanguage?: string;
 }) {
-  const msg = `🏥 *${opts.hospitalName}*
+  let msg = `🏥 *${opts.hospitalName}*
 
 ✅ *Appointment Confirmed*
 
@@ -73,6 +75,15 @@ ${opts.tokenNumber ? `Token: ${opts.tokenNumber}` : ""}
 ${opts.hospitalAddress ? `📍 ${opts.hospitalAddress}` : ""}
 
 Reply to this message for any queries.`;
+
+  if (opts.patientLanguage && opts.patientLanguage !== "English") {
+    try {
+      msg = await translateText(msg, opts.patientLanguage, opts.hospitalId, {
+        context: "appointment_confirmation",
+        patientId: opts.patientId,
+      });
+    } catch { /* send English on failure */ }
+  }
 
   const waUrl = makeWaUrl(opts.phone, msg);
   await recordNotification({
@@ -100,8 +111,9 @@ export async function sendAppointmentReminder(opts: {
   date: string;
   time?: string;
   tokenNumber?: string;
+  patientLanguage?: string;
 }) {
-  const msg = `🏥 *${opts.hospitalName}*
+  let msg = `🏥 *${opts.hospitalName}*
 
 Hello ${opts.patientName} 👋
 
@@ -116,6 +128,17 @@ ${opts.tokenNumber ? `🎫 *Token:* ${opts.tokenNumber}` : ""}
 Please arrive 15 minutes before your scheduled time.
 
 For queries: ${opts.hospitalPhone || "Contact hospital reception"}`;
+
+  if (opts.patientLanguage && opts.patientLanguage !== "English") {
+    try {
+      msg = await translateText(msg, opts.patientLanguage, opts.hospitalId, {
+        context: "appointment_reminder",
+        patientId: opts.patientId,
+      });
+    } catch { /* send English on failure */ }
+  }
+
+  const waUrl = makeWaUrl(opts.phone, msg);
 
   const templateName = await shouldAutoSend(opts.hospitalId, "appointment_reminder");
   if (templateName) {

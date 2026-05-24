@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Receipt, Printer, MessageSquare, FileText, Send, Lock, AlertTriangle } from "lucide-react";
+import { Receipt, Printer, MessageSquare, FileText, Send, Lock, AlertTriangle, ShieldAlert } from "lucide-react";
 import { printDocument, printHeader, printAmount } from "@/lib/printUtils";
+import { logRecordAccess } from "@/lib/ims";
 import { Badge } from "@/components/ui/badge";
 import RevenueIntelligencePanel from "@/components/billing/RevenueIntelligencePanel";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import LineItemsTab from "@/components/billing/tabs/LineItemsTab";
 import PaymentsTab from "@/components/billing/tabs/PaymentsTab";
 import InsuranceTab from "@/components/billing/tabs/InsuranceTab";
+import DiscountTab from "@/components/billing/tabs/DiscountTab";
 import GSTInvoiceModal from "@/components/billing/GSTInvoiceModal";
 import PaymentLinkModal from "@/components/billing/PaymentLinkModal";
 import { useWhatsAppNotification } from "@/components/whatsapp/WhatsAppNotificationCard";
@@ -20,7 +22,22 @@ import { autoPostJournalEntry } from "@/lib/accounting";
 import { logAudit } from "@/lib/auditLog";
 import { recalculateBillTotalsSafe } from "@/lib/billTotals";
 import { autoPullAdmissionCharges } from "@/lib/ipdBilling";
+import { formatINR } from "@/lib/currency";
 import type { BillRecord } from "@/pages/billing/BillingPage";
+
+interface DiscountApproval {
+  id: string;
+  discount_amount: number;
+  discount_pct: number;
+  reason: string;
+  required_approver_role: string;
+  status: string;
+  requested_at: string;
+  approved_at: string | null;
+  rejection_reason: string | null;
+  requester: { full_name: string } | null;
+  approver: { full_name: string } | null;
+}
 
 export interface LineItem {
   id: string;
@@ -51,12 +68,20 @@ const statusBadgeStyle: Record<string, string> = {
   unpaid: "bg-destructive/10 text-destructive",
   partial: "bg-accent/10 text-accent",
   paid: "bg-success/10 text-success",
+  pending_approval: "bg-amber-100 text-amber-700",
 };
 
 interface Props {
   bill: BillRecord | null;
   hospitalId: string | null;
   onRefresh: () => void;
+}
+
+interface AdmissionEstimate {
+  estimated_days: number;
+  estimated_amount: number;
+  deposit_required: number;
+  remarks: string | null;
 }
 
 const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
@@ -68,12 +93,27 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
   const [showGstInvoice, setShowGstInvoice] = useState(false);
   const [showPaymentLink, setShowPaymentLink] = useState(false);
   const [hospitalInfo, setHospitalInfo] = useState<any>(null);
+  const [estimateData, setEstimateData] = useState<AdmissionEstimate | null>(null);
+  const [discountApprovals, setDiscountApprovals] = useState<DiscountApproval[]>([]);
 
   useEffect(() => {
     if (!hospitalId) return;
     supabase.from("hospitals").select("name, gstin, address").eq("id", hospitalId).maybeSingle()
       .then(({ data }) => setHospitalInfo(data));
   }, [hospitalId]);
+
+  // Fetch admission estimate for IPD bills
+  useEffect(() => {
+    if (!bill || bill.bill_type !== "ipd" || !bill.admission_id) { setEstimateData(null); return; }
+    (supabase as any)
+      .from("admission_estimates")
+      .select("estimated_days, estimated_amount, deposit_required, remarks")
+      .eq("admission_id", bill.admission_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }: any) => setEstimateData(data || null));
+  }, [bill?.id, bill?.admission_id]);
 
   const fetchLineItems = useCallback(async () => {
     if (!bill) return;
@@ -120,10 +160,21 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
     );
   }, [bill]);
 
+  const fetchDiscountApprovals = useCallback(async () => {
+    if (!bill) return;
+    const { data } = await (supabase as any)
+      .from("bill_discount_approvals")
+      .select("*, requester:users!bill_discount_approvals_requested_by_fkey(full_name), approver:users!bill_discount_approvals_approved_by_fkey(full_name)")
+      .eq("bill_id", bill.id)
+      .order("requested_at", { ascending: false });
+    setDiscountApprovals(data || []);
+  }, [bill]);
+
   useEffect(() => {
     fetchLineItems();
     fetchPayments();
-  }, [fetchLineItems, fetchPayments]);
+    fetchDiscountApprovals();
+  }, [fetchLineItems, fetchPayments, fetchDiscountApprovals]);
 
   // Auto-pull admission charges on first open of a draft IPD bill
   const autoPulledRef = React.useRef<Set<string>>(new Set());
@@ -315,6 +366,12 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
           {bill.bill_status === "draft" && (
             <Button size="sm" className="h-7 text-[11px]" onClick={handleFinalize}>Finalise Bill</Button>
           )}
+          {bill.bill_status === "pending_approval" && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-100 border border-amber-300">
+              <ShieldAlert size={13} className="text-amber-600 shrink-0" />
+              <span className="text-[11px] font-semibold text-amber-800">Awaiting discount approval</span>
+            </div>
+          )}
           {bill.bill_status === "final" && bill.gst_amount > 0 && !isIRNLocked && (
             <Button size="sm" className="h-7 text-[11px] gap-1 bg-emerald-700 hover:bg-emerald-800 text-white" onClick={handleGenerateGST}>
               <FileText size={12} /> GST Invoice
@@ -345,7 +402,19 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
               ${bill.insurance_amount > 0 ? `<div class="row"><span class="label">Insurance</span><span>-${printAmount(bill.insurance_amount)}</span></div>` : ""}
               <div class="row" style="font-weight:bold;font-size:15px"><span>Patient Payable</span><span class="amount">${printAmount(Math.max(0, bill.patient_payable))}</span></div>
               ${bill.paid_amount > 0 ? `<div class="row"><span class="label">Paid</span><span>${printAmount(bill.paid_amount)}</span></div>` : ""}
-              ${bill.balance_due > 0 ? `<div class="row" style="color:#dc2626;font-weight:bold"><span>Balance Due</span><span>${printAmount(bill.balance_due)}</span></div>` : ""}`;
+              ${bill.balance_due > 0 ? `<div class="row" style="color:#dc2626;font-weight:bold"><span>Balance Due</span><span>${printAmount(bill.balance_due)}</span></div>` : ""}
+              ${discountApprovals.filter(a => a.status === "approved").length > 0 ? `
+                <div style="margin-top:12px;border-top:1px dashed #ccc;padding-top:10px">
+                  <p style="font-size:10px;font-weight:bold;text-transform:uppercase;color:#555;margin-bottom:6px">Discount Authorisation</p>
+                  ${discountApprovals.filter(a => a.status === "approved").map(a => `
+                    <div style="font-size:10px;color:#444;margin-bottom:3px">
+                      ${printAmount(a.discount_amount)} (${Number(a.discount_pct).toFixed(1)}%) discount approved by ${a.approver?.full_name || "—"} on ${a.approved_at ? new Date(a.approved_at).toLocaleDateString("en-IN") : "—"}
+                      — <em>${a.reason}</em>
+                    </div>
+                  `).join("")}
+                </div>
+              ` : ""}`;
+            logRecordAccess({ hospitalId, recordType: "Billing", recordId: bill.id, patientId: bill.patient_id, action: "print" });
             printDocument(`Bill ${bill.bill_number}`, body);
           }}>
             <Printer size={12} /> Print
@@ -356,12 +425,66 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
       {/* AI Revenue Intelligence */}
       <RevenueIntelligencePanel bill={bill} hospitalId={hospitalId} lineItems={lineItems} />
 
+      {/* Estimate vs Actual comparison (IPD bills only) */}
+      {estimateData && bill.bill_type === "ipd" && (() => {
+        const actual = bill.total_amount || 0;
+        const estimated = estimateData.estimated_amount || 0;
+        const overrun = estimated > 0 ? ((actual - estimated) / estimated) * 100 : 0;
+        const isOverBudget = overrun > 20;
+        return (
+          <div className={cn(
+            "flex-shrink-0 mx-5 mt-3 mb-1 rounded-lg border px-4 py-3",
+            isOverBudget ? "bg-red-50 border-red-200" : "bg-slate-50 border-slate-200"
+          )}>
+            <p className="text-[11px] font-bold uppercase text-slate-500 mb-2">Estimate vs Actual</p>
+            <div className="flex items-center gap-6 flex-wrap">
+              <div>
+                <p className="text-[10px] text-slate-500">Estimated</p>
+                <p className="text-sm font-bold text-slate-700">₹{estimated.toLocaleString("en-IN")}</p>
+                <p className="text-[10px] text-slate-400">{estimateData.estimated_days}d stay</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-500">Actual (so far)</p>
+                <p className={cn("text-sm font-bold", isOverBudget ? "text-red-600" : "text-slate-700")}>
+                  ₹{actual.toLocaleString("en-IN")}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-500">Deposit Required</p>
+                <p className="text-sm font-bold text-slate-700">₹{(estimateData.deposit_required || 0).toLocaleString("en-IN")}</p>
+              </div>
+              {estimated > 0 && (
+                <div className="ml-auto">
+                  <span className={cn(
+                    "text-[11px] font-semibold px-2 py-1 rounded-full",
+                    isOverBudget ? "bg-red-100 text-red-700" : overrun > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                  )}>
+                    {overrun > 0 ? `+${overrun.toFixed(0)}% over estimate` : overrun < 0 ? `${Math.abs(overrun).toFixed(0)}% under estimate` : "On estimate"}
+                  </span>
+                  {isOverBudget && (
+                    <p className="text-[10px] text-red-600 font-medium mt-1 flex items-center gap-1">
+                      <AlertTriangle className="h-3 w-3" /> More than 20% over estimate
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Tabs */}
       <Tabs defaultValue="items" className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="bg-card border-b border-border rounded-none h-11 px-5 flex-shrink-0">
           <TabsTrigger value="items" className="text-xs">Line Items</TabsTrigger>
           <TabsTrigger value="payments" className="text-xs">Payments</TabsTrigger>
           <TabsTrigger value="insurance" className="text-xs">Insurance</TabsTrigger>
+          <TabsTrigger value="discount" className="text-xs flex items-center gap-1">
+            Discount
+            {bill.bill_status === "pending_approval" && (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
+            )}
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="items" className="flex-1 overflow-hidden mt-0">
           <LineItemsTab
@@ -382,6 +505,15 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
         </TabsContent>
         <TabsContent value="insurance" className="flex-1 overflow-auto mt-0 p-5">
           <InsuranceTab bill={bill} hospitalId={hospitalId} onRefresh={onRefresh} />
+        </TabsContent>
+        <TabsContent value="discount" className="flex-1 overflow-auto mt-0 p-5">
+          {hospitalId && (
+            <DiscountTab
+              bill={bill}
+              hospitalId={hospitalId}
+              onRefresh={() => { fetchDiscountApprovals(); onRefresh(); }}
+            />
+          )}
         </TabsContent>
       </Tabs>
 

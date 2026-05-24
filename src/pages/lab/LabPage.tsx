@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Microscope } from "lucide-react";
+import NABHBadge from "@/components/nabh/NABHBadge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import LabQueuePanel from "@/components/lab/LabQueuePanel";
 import LabInfoPanel from "@/components/lab/LabInfoPanel";
@@ -212,6 +213,8 @@ const LabPage: React.FC = () => {
         >
           🔗 External Referrals
         </button>
+        <div className="ml-auto" />
+        <NABHBadge standardCodes={["AAC.3", "HIC.4", "QPS.2"]} />
       </div>
 
       {mainTab === "qc" && hospitalId ? (

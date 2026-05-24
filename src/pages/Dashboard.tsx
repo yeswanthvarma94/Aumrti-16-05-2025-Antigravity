@@ -29,6 +29,9 @@ import DoctorsDrillDown from "@/components/dashboard/drilldowns/DoctorsDrillDown
 import { supabase } from "@/integrations/supabase/client";
 import ChronicFollowupAlert from "@/components/dashboard/ChronicFollowupAlert";
 import ChronicFollowupsStatCard from "@/components/dashboard/ChronicFollowupsStatCard";
+import NABHReadinessCard from "@/components/dashboard/NABHReadinessCard";
+import OverdueCAPABanner from "@/components/safety/OverdueCAPABanner";
+import NABHQIAlertCard from "@/components/dashboard/NABHQIAlertCard";
 
 function formatRevenue(amount: number): string {
   if (amount >= 10000000) return "₹" + (amount / 10000000).toFixed(1) + "Cr";
@@ -240,6 +243,20 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Overdue CAPA banner — shown regardless of data state */}
+      {hasAccess("/quality/events", role, permissions) && (
+        <div className="-mx-4 mb-3 shrink-0">
+          <OverdueCAPABanner hospitalId={hospitalId} />
+        </div>
+      )}
+
+      {/* NABH QI Anomaly Alerts — weekly AI-detected indicator deviations */}
+      {hasAccess("/nabh/compliance", role, permissions) && (
+        <div className="mb-3 shrink-0">
+          <NABHQIAlertCard hospitalId={hospitalId} role={role} />
+        </div>
+      )}
+
       {isEmpty && (
         <div className="flex flex-col items-center justify-center flex-1 gap-4">
           <Database size={48} className="text-muted-foreground" />
@@ -253,7 +270,7 @@ const Dashboard: React.FC = () => {
       {!isEmpty && (
         <>
           {/* ROW 1 — KPI Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 shrink-0 mb-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3 shrink-0 mb-3">
             {/* Card 1 - Patients */}
             {hasAccess("/opd", role, permissions) && (
               <Card
@@ -386,10 +403,15 @@ const Dashboard: React.FC = () => {
  
             {/* Card 7 - Follow-ups Due */}
             {hasAccess("/opd", role, permissions) && (
-              <ChronicFollowupsStatCard 
-                hospitalId={hospitalId} 
+              <ChronicFollowupsStatCard
+                hospitalId={hospitalId}
                 onClick={() => openDrillDown("followups")}
               />
+            )}
+
+            {/* Card 8 - NABH Readiness */}
+            {hasAccess("/nabh/compliance", role, permissions) && (
+              <NABHReadinessCard hospitalId={hospitalId} />
             )}
           </div>
 

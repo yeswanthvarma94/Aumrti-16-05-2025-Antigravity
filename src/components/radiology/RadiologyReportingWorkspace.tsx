@@ -10,10 +10,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Play, Camera, FileText, Check, Save, Printer, Send, Mic, MicOff,
-  Sparkles, ExternalLink, X, AlertTriangle,
+  Sparkles, ExternalLink, X, AlertTriangle, ClipboardList,
 } from "lucide-react";
 import type { RadiologyOrder } from "@/pages/radiology/RadiologyPage";
 import { useAIAudit } from "@/hooks/useAIAudit";
+import { useAIFeatureFlag } from "@/hooks/useAIFeatureFlag";
+import AIAttestationModal from "@/components/ai/AIAttestationModal";
+import PCPNDTFormModal from "./PCPNDTFormModal";
 
 interface Report {
   id: string;
@@ -115,6 +118,9 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
   const [pacsUrl, setPacsUrl] = useState("");
 
   // PCPNDT state
+  const [pcpndtRecordExists, setPcpndtRecordExists] = useState(false);
+  const [showPcpndtModal, setShowPcpndtModal] = useState(false);
+  // Legacy inline form state (kept for old pcpndt_form_f records that may still exist)
   const [pcpndtName, setPcpndtName] = useState("");
   const [pcpndtAge, setPcpndtAge] = useState<number | null>(null);
   const [pcpndtAddress, setPcpndtAddress] = useState("");
@@ -124,11 +130,13 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
   const [pcpndtRemarks, setPcpndtRemarks] = useState("");
 
   // AI state
+  const radiologyAIEnabled = useAIFeatureFlag("radiology_impression");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [aiConfidence, setAiConfidence] = useState<number | null>(null);
   const [aiReasoning, setAiReasoning] = useState<string | null>(null);
   const [aiFlagType, setAiFlagType] = useState<"critical" | "abnormal" | "normal">("abnormal");
+  const [showImpressionAttestation, setShowImpressionAttestation] = useState(false);
 
   // Voice state
   const [isRecording, setIsRecording] = useState(false);
@@ -176,31 +184,16 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
     setDoseMgy((order as any).dose_mgy ? String((order as any).dose_mgy) : "");
     setPregnancyStatus((order as any).pregnancy_status || "not_applicable");
 
-    // PCPNDT
+    // PCPNDT — check pcpndt_records (new authoritative table)
     if (order.is_pcpndt) {
-      const { data: pf } = await supabase
-        .from("pcpndt_form_f")
-        .select("*")
-        .eq("order_id", order.id)
+      const { data: rec } = await (supabase as any)
+        .from("pcpndt_records")
+        .select("id")
+        .eq("radiology_order_id", order.id)
         .maybeSingle();
-      if (pf) {
-        setPcpndt(pf as any);
-        setPcpndtName(pf.patient_name || "");
-        setPcpndtAge(pf.patient_age);
-        setPcpndtAddress(pf.patient_address || "");
-        setPcpndtReferredBy(pf.referred_by || "");
-        setPcpndtIndication(pf.indication || "");
-        setPcpndtSexDecl(!(pf.sex_determination_done));
-        setPcpndtRemarks(pf.remarks || "");
-      } else {
-        setPcpndtName(order.patients?.full_name || "");
-        setPcpndtAge(order.patients?.dob ? Math.floor((Date.now() - new Date(order.patients.dob).getTime()) / (365.25*24*60*60*1000)) : null);
-        setPcpndtAddress("");
-        setPcpndtReferredBy(order.ordered_by_user?.full_name || "");
-        setPcpndtIndication(order.indication || "");
-        setPcpndtSexDecl(false);
-        setPcpndtRemarks("");
-      }
+      setPcpndtRecordExists(!!rec);
+    } else {
+      setPcpndtRecordExists(false);
     }
 
     setLoading(false);
@@ -250,18 +243,18 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
       return;
     }
 
-    // PCPNDT compliance: block signing for USG without Form F
-    if (order.is_pcpndt || order.modality_type === "usg") {
-      const { data: formF } = await supabase
-        .from("pcpndt_form_f")
+    // PCPNDT compliance: block signing without Form F (pcpndt_records)
+    if (order.is_pcpndt) {
+      const { data: rec } = await (supabase as any)
+        .from("pcpndt_records")
         .select("id")
-        .eq("order_id", order.id)
+        .eq("radiology_order_id", order.id)
         .maybeSingle();
 
-      if (!formF) {
+      if (!rec) {
         toast({
-          title: "PCPNDT Form F required before reporting",
-          description: "Please complete Form F in the PCPNDT tab before signing the report.",
+          title: "PCPNDT Form F required before signing",
+          description: "Please complete the PCPNDT Form F in the PCPNDT tab before validating the report.",
           variant: "destructive",
         });
         return;
@@ -513,6 +506,18 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
 
   // Status action button
   const renderStatusAction = () => {
+    // PCPNDT orders require Form F before scanning can begin
+    if (order.is_pcpndt && !pcpndtRecordExists && order.status !== "validated") {
+      return (
+        <Button
+          size="sm"
+          className="bg-amber-600 hover:bg-amber-700 text-[11px] h-7"
+          onClick={() => setShowPcpndtModal(true)}
+        >
+          <ClipboardList size={12} /> Fill PCPNDT Form First
+        </Button>
+      );
+    }
     if (["ordered", "scheduled", "patient_arrived"].includes(order.status)) {
       return (
         <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-[11px] h-7" onClick={() => updateOrderStatus("in_progress")}>
@@ -651,7 +656,7 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
             <div>
               <div className="flex items-center justify-between">
                 <Label className="text-[11px] uppercase text-muted-foreground font-bold tracking-wide">Impression / Conclusion</Label>
-                {!isSigned && (
+                {!isSigned && radiologyAIEnabled && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -705,7 +710,7 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
                     ))}
                   </div>
                   <div className="flex gap-2 mt-2">
-                    <Button size="sm" className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700" onClick={useAiImpression}>
+                    <Button size="sm" className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700" onClick={() => setShowImpressionAttestation(true)}>
                       <Check size={12} /> Use This
                     </Button>
                     <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={dismissAiImpression}>
@@ -898,62 +903,110 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className="text-[11px] uppercase text-muted-foreground font-bold">Patient Name *</Label>
-                <Input value={pcpndtName} onChange={e => setPcpndtName(e.target.value)} className="mt-1 text-[13px]" />
+            {pcpndtRecordExists ? (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Check size={16} className="text-emerald-600" />
+                  <p className="text-sm font-semibold text-emerald-800">PCPNDT Form F Completed</p>
+                </div>
+                <p className="text-[12px] text-emerald-700">
+                  Form F has been saved for this order. The legal declaration and consent have been recorded.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1 border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                  onClick={() => setShowPcpndtModal(true)}
+                >
+                  <ClipboardList size={13} /> Open / Edit PCPNDT Form F
+                </Button>
               </div>
-              <div>
-                <Label className="text-[11px] uppercase text-muted-foreground font-bold">Patient Age *</Label>
-                <Input type="number" value={pcpndtAge ?? ""} onChange={e => setPcpndtAge(e.target.value ? parseInt(e.target.value) : null)} className="mt-1 text-[13px]" />
+            ) : (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle size={16} className="text-red-600" />
+                  <p className="text-sm font-semibold text-red-800">Form F Not Completed</p>
+                </div>
+                <p className="text-[12px] text-red-700">
+                  PCPNDT Form F must be completed before proceeding with this scan or signing the report.
+                </p>
+                <Button
+                  size="sm"
+                  className="gap-1 bg-[hsl(220,55%,23%)] hover:bg-[hsl(220,55%,30%)]"
+                  onClick={() => setShowPcpndtModal(true)}
+                >
+                  <ClipboardList size={13} /> Fill PCPNDT Form F
+                </Button>
               </div>
-            </div>
+            )}
 
-            <div>
-              <Label className="text-[11px] uppercase text-muted-foreground font-bold">Patient Address *</Label>
-              <Textarea value={pcpndtAddress} onChange={e => setPcpndtAddress(e.target.value)} rows={2} className="mt-1 text-[13px] resize-none" />
-            </div>
-
-            <div>
-              <Label className="text-[11px] uppercase text-muted-foreground font-bold">Referred By (Doctor) *</Label>
-              <Input value={pcpndtReferredBy} onChange={e => setPcpndtReferredBy(e.target.value)} className="mt-1 text-[13px]" />
-            </div>
-
-            <div>
-              <Label className="text-[11px] uppercase text-muted-foreground font-bold">Indication for USG *</Label>
-              <Textarea value={pcpndtIndication} onChange={e => setPcpndtIndication(e.target.value)} rows={2} className="mt-1 text-[13px] resize-none" placeholder="E.g. Pregnancy dating, foetal wellbeing..." />
-            </div>
-
-            <div>
-              <Label className="text-[11px] uppercase text-muted-foreground font-bold">Remarks</Label>
-              <Textarea value={pcpndtRemarks} onChange={e => setPcpndtRemarks(e.target.value)} rows={2} className="mt-1 text-[13px] resize-none" />
-            </div>
-
-            {/* Legal declaration */}
-            <div className="bg-muted rounded-lg p-3">
-              <p className="text-[13px] text-foreground/80 leading-6">
-                "I hereby declare that while conducting the ultrasonography/image scanning/diagnostic technique on <strong>{pcpndtName || "___"}</strong>, I have neither detected nor disclosed the sex of her foetus to any person in any manner."
-              </p>
-            </div>
-
-            {/* Sex determination checkbox */}
-            <div className="flex items-start gap-2 p-3 border border-red-200 rounded-lg bg-red-50">
-              <Checkbox
-                checked={pcpndtSexDecl}
-                onCheckedChange={v => setPcpndtSexDecl(!!v)}
-                className="mt-0.5 data-[state=checked]:bg-emerald-600 data-[state=checked]:border-emerald-600"
-              />
-              <Label className="text-[12px] text-foreground leading-5 cursor-pointer">
-                I confirm that sex of the foetus has <strong>NOT</strong> been determined or disclosed.
-              </Label>
-            </div>
-
-            <Button className="w-full h-10 bg-[hsl(220,55%,23%)] hover:bg-[hsl(220,55%,30%)]" onClick={savePcpndt}>
-              Save Form F
-            </Button>
           </TabsContent>
         )}
       </Tabs>
+
+      {/* AI Impression Attestation Modal */}
+      {aiSuggestion && (
+        <AIAttestationModal
+          open={showImpressionAttestation}
+          title="AI Radiology Impression — Doctor Attestation Required"
+          feature="radiology_impression"
+          sourceId={order.id}
+          hospitalId={hospitalId}
+          aiOutput={{
+            impression: aiSuggestion,
+            modality: order.modality_type,
+            study: order.study_name,
+            confidence: aiConfidence,
+            reasoning: aiReasoning,
+          }}
+          previewContent={[
+            `Study: ${order.study_name} (${order.modality_type?.toUpperCase()})`,
+            aiConfidence != null ? `AI Confidence: ${Math.round(aiConfidence * 100)}%` : "",
+            aiReasoning ? `\nReasoning: ${aiReasoning}` : "",
+            `\nAI Impression:\n${aiSuggestion}`,
+          ].filter(Boolean).join("\n")}
+          initialEditableText={aiSuggestion}
+          editableLabel="Impression (edit before saving to report)"
+          onAccept={(editedText) => {
+            setImpression(editedText);
+            logAudit(
+              {
+                hospitalId,
+                patientId: order.patient_id,
+                featureKey: "radiology_impression",
+                aiOutput: { impression: aiSuggestion, modality: order.modality_type, study: order.study_name },
+                confidence: aiConfidence ?? undefined,
+                reasoning: aiReasoning ?? undefined,
+              },
+              "accepted",
+              editedText !== aiSuggestion ? { edited_impression: editedText } : undefined
+            );
+            setAiSuggestion(null);
+            setAiConfidence(null);
+            setAiReasoning(null);
+            setShowImpressionAttestation(false);
+            if (report) supabase.from("radiology_reports").update({ is_ai_used: true }).eq("id", report.id);
+            supabase.from("radiology_orders").update({ ai_flag: aiFlagType } as any).eq("id", order.id);
+            onStatusChange();
+          }}
+          onDiscard={() => setShowImpressionAttestation(false)}
+        />
+      )}
+
+      {/* PCPNDT Form Modal */}
+      {showPcpndtModal && order.patient_id && (
+        <PCPNDTFormModal
+          hospitalId={hospitalId}
+          orderId={order.id}
+          patientId={order.patient_id}
+          patientName={order.patients?.full_name || ""}
+          patientDob={order.patients?.dob || null}
+          orderedByName={order.ordered_by_user?.full_name || null}
+          orderIndication={order.indication || null}
+          onClose={() => setShowPcpndtModal(false)}
+          onSaved={() => { setPcpndtRecordExists(true); setShowPcpndtModal(false); onStatusChange(); }}
+        />
+      )}
     </div>
   );
 };

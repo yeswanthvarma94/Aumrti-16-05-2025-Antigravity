@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
-import { BedDouble, ExternalLink, ArrowUpRight, Printer } from "lucide-react";
-import { printDocument, printHeader } from "@/lib/printUtils";
+import { BedDouble, ExternalLink, ArrowUpRight, Printer, FileText } from "lucide-react";
+import { printDocument, printHeader, printAmount } from "@/lib/printUtils";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,11 @@ import IPDWardRoundTab from "./tabs/IPDWardRoundTab";
 import IPDNotesTab from "./tabs/IPDNotesTab";
 import IPDDocumentsTab from "./tabs/IPDDocumentsTab";
 import IPDLedgerTab from "./tabs/IPDLedgerTab";
+import NursingKardexTab from "./tabs/NursingKardexTab";
+import IPDDeviceTab from "./tabs/IPDDeviceTab";
 import BedTransferModal from "./BedTransferModal";
+import AdmitPatientModal from "./AdmitPatientModal";
+import MLCDetailsModal from "@/components/emergency/MLCDetailsModal";
 import NewLabOrderModal from "@/components/lab/NewLabOrderModal";
 import NewRadiologyOrderModal from "@/components/radiology/NewRadiologyOrderModal";
 import { useWhatsAppNotification } from "@/components/whatsapp/WhatsAppNotificationCard";
@@ -57,6 +61,15 @@ export interface PatientDetails {
   insurance_id: string | null;
 }
 
+interface AdmissionEstimate {
+  id: string;
+  estimated_days: number;
+  estimated_amount: number;
+  deposit_required: number;
+  remarks: string | null;
+  created_at: string;
+}
+
 const emptyPrescription: PrescriptionData = {
   drugs: [],
   lab_orders: [],
@@ -81,7 +94,19 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
   const { registerScreen, unregisterScreen } = useVoiceScribe();
   const { show: showWaNotif, card: waCard } = useWhatsAppNotification();
 
+  // Estimate tracking
+  const [estimate, setEstimate] = useState<AdmissionEstimate | null | undefined>(undefined);
+  const [showEstimateModal, setShowEstimateModal] = useState(false);
 
+  // MLC tracking: undefined=loading, null=not mlc, false=mlc but no case row, true=mlc case documented
+  const [mlcCaseStatus, setMlcCaseStatus] = useState<boolean | null | undefined>(null);
+  const [showMlcModal, setShowMlcModal] = useState(false);
+
+  // MEWS alert from latest nursing vitals entry
+  const [latestMews, setLatestMews] = useState<number | null>(null);
+
+  // Insurance pre-auth banner: undefined=loading, false=not needed, true=needed
+  const [preAuthNeeded, setPreAuthNeeded] = useState<boolean>(false);
 
   useEffect(() => {
     if (!bed?.admission) { setDeptName(null); return; }
@@ -107,24 +132,64 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
       });
   }, [bed]);
 
-  // Fetch latest NEWS2 score for the patient header badge
+  // Fetch estimate for this admission
   useEffect(() => {
-    if (!bed?.admission) { setLatestNews2(null); return; }
+    if (!bed?.admission) { setEstimate(undefined); return; }
     const admissionData = bed.admission as any;
-    supabase.from("ipd_vitals")
-      .select("news2_score")
+    (supabase as any).from("admission_estimates")
+      .select("id, estimated_days, estimated_amount, deposit_required, remarks, created_at")
       .eq("admission_id", admissionData.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }: any) => setEstimate(data || null));
+  }, [bed, showEstimateModal]);
+
+  // Fetch MLC case status when admission has is_mlc=true
+  useEffect(() => {
+    const admData = bed?.admission as any;
+    if (!admData?.is_mlc) { setMlcCaseStatus(null); return; }
+    (supabase as any).from("mlc_cases")
+      .select("id", { count: "exact", head: true })
+      .eq("admission_id", admData.id)
+      .then(({ count }: any) => setMlcCaseStatus((count ?? 0) > 0));
+  }, [bed, showMlcModal]);
+
+  // Fetch latest NEWS2 + MEWS scores from nursing_vitals (auto-calculated on each entry)
+  useEffect(() => {
+    if (!bed?.admission) { setLatestNews2(null); setLatestMews(null); return; }
+    const admData = bed.admission as any;
+    (supabase as any).from("nursing_vitals")
+      .select("news2_score, mews_score")
+      .eq("admission_id", admData.id)
       .order("recorded_at", { ascending: false })
       .limit(1)
-      .then(({ data }) => {
-        setLatestNews2(data?.[0]?.news2_score ?? null);
+      .maybeSingle()
+      .then(({ data }: any) => {
+        setLatestNews2(data?.news2_score ?? null);
+        setLatestMews(data?.mews_score ?? null);
       });
   }, [bed, activeTab]);
+
+  // Check if insurance pre-auth is required for this admission
+  useEffect(() => {
+    const admData = bed?.admission as any;
+    const INSURANCE_PAYER_TYPES = ["tpa", "pmjay", "cghs", "esi", "state_scheme", "corporate"];
+    if (!admData?.id || !INSURANCE_PAYER_TYPES.includes(admData.payer_type)) {
+      setPreAuthNeeded(false);
+      return;
+    }
+    (supabase as any)
+      .from("insurance_pre_auth")
+      .select("id", { count: "exact", head: true })
+      .eq("admission_id", admData.id)
+      .eq("status", "approved")
+      .then(({ count }: any) => setPreAuthNeeded((count ?? 0) === 0));
+  }, [bed]);
 
   // Voice Scribe Integration
   useEffect(() => {
     const fillFn = (data: Record<string, unknown>) => {
-      // Fill prescription
       const drugs = ((data.prescription as DrugEntry[]) || []).map((d) => ({
         drug_name: d.drug_name || "",
         dose: d.dose || "",
@@ -230,13 +295,11 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
   const handlePrintCaseSheet = async () => {
     if (!bed?.admission || !hospitalId || !patient) return;
     const admissionData = bed.admission as any;
-    
+
     toast({ title: "Generating case sheet..." });
 
-    // Fetch hospital info
     const { data: hospital } = await supabase.from("hospitals").select("name, address").eq("id", hospitalId).maybeSingle();
 
-    // Fetch all details
     const [vitalsRes, medsRes, notesRes] = await Promise.all([
       supabase.from("ipd_vitals").select("*").eq("admission_id", admissionId).order("recorded_at", { ascending: false }),
       supabase.from("ipd_medications").select("*").eq("admission_id", admissionId).order("created_at", { ascending: false }),
@@ -256,22 +319,17 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
              <td>${v.respiratory_rate || '—'}</td>
              <td><b>${v.news2_score ?? '—'}</b></td>
            </tr>`).join("")}
-         </table>`
-      : "";
+         </table>` : "";
 
     const medsHtml = medsRes.data && medsRes.data.length > 0
       ? `<div class="section-title">Active Medications</div>
          <table>
            <tr><th>Medication</th><th>Dose</th><th>Freq</th><th>Route</th><th>Status</th></tr>
            ${medsRes.data.map(m => `<tr>
-             <td><b>${m.drug_name}</b></td>
-             <td>${m.dose}</td>
-             <td>${m.frequency}</td>
-             <td>${m.route}</td>
+             <td><b>${m.drug_name}</b></td><td>${m.dose}</td><td>${m.frequency}</td><td>${m.route}</td>
              <td>${m.is_active ? 'Active' : 'Stopped'}</td>
            </tr>`).join("")}
-         </table>`
-      : "";
+         </table>` : "";
 
     const notesHtml = notesRes.data && notesRes.data.length > 0
       ? `<div class="section-title">Clinical Ward Rounds</div>
@@ -288,12 +346,10 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
                <div><span class="label">Plan:</span> ${n.plan || '—'}</div>
              </div>
            </div>
-         `).join("")}`
-      : "";
+         `).join("")}` : "";
 
     const body = `
       ${printHeader(hospital?.name || "Hospital", "IPD CASE SHEET", `<p style="font-size:12px">${hospital?.address || ""}</p>`)}
-      
       <div style="display:flex;justify-content:space-between;border-bottom:2px solid #1A2F5A;padding-bottom:10px;margin-bottom:15px;">
         <div>
           <div class="row"><span class="label">Patient:</span> <b>${patient.full_name}</b></div>
@@ -306,22 +362,75 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
           <div class="row"><span class="label">Admitted:</span> <span>${new Date(admissionData.admitted_at).toLocaleDateString("en-IN")}</span></div>
         </div>
       </div>
-
-      ${vitalsHtml}
-      ${medsHtml}
-      ${notesHtml}
-
+      ${vitalsHtml}${medsHtml}${notesHtml}
       <div style="margin-top:40px; border-top:1px dashed #cbd5e1; padding-top:20px; font-size:10px; color:#94a3b8; text-align:center;">
         End of Clinical Case Sheet — Generated on ${new Date().toLocaleString("en-IN")}
-      </div>
-    `;
+      </div>`;
 
     printDocument(`CaseSheet_${patient.uhid}`, body);
   };
 
+  const handlePrintEstimate = async () => {
+    if (!patient || !hospitalId || !estimate) return;
+    const admissionData = bed.admission as any;
+    const { data: hospital } = await supabase.from("hospitals").select("name, address").eq("id", hospitalId).maybeSingle();
+
+    // Fetch deposit collected
+    const { data: receipts } = await (supabase as any)
+      .from("advance_receipts")
+      .select("amount, receipt_number, created_at")
+      .eq("hospital_id", hospitalId)
+      .eq("patient_id", patient.id)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    const depositCollected = (receipts || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+
+    const body = `
+      ${printHeader(hospital?.name || "Hospital", "ADMISSION ESTIMATE", `<p style="font-size:12px">${hospital?.address || ""}</p>`)}
+      <div style="display:flex;justify-content:space-between;border-bottom:2px solid #1A2F5A;padding-bottom:10px;margin-bottom:15px;">
+        <div>
+          <div class="row"><span class="label">Patient:</span> <b>${patient.full_name}</b></div>
+          <div class="row"><span class="label">UHID:</span> <b>${patient.uhid}</b></div>
+          <div class="row"><span class="label">Age/Sex:</span> <span>${patientAge !== null ? `${patientAge}y` : '—'} / ${patient.gender || '—'}</span></div>
+        </div>
+        <div style="text-align:right">
+          <div class="row"><span class="label">IP No:</span> <b>${admissionData.admission_number || '—'}</b></div>
+          <div class="row"><span class="label">Date:</span> <b>${new Date().toLocaleDateString("en-IN")}</b></div>
+          <div class="row"><span class="label">Bed:</span> <b>${bed.bed_number}</b></div>
+        </div>
+      </div>
+
+      <div class="section-title">Estimate Details</div>
+      <table>
+        <tr><th>Item</th><th style="text-align:right">Amount</th></tr>
+        <tr><td>Estimated stay duration</td><td style="text-align:right">${estimate.estimated_days} day${estimate.estimated_days !== 1 ? 's' : ''}</td></tr>
+        <tr><td><b>Total Estimated Amount</b></td><td style="text-align:right"><b>${printAmount(estimate.estimated_amount)}</b></td></tr>
+        <tr><td>Deposit Required</td><td style="text-align:right">${printAmount(estimate.deposit_required)}</td></tr>
+        ${depositCollected > 0 ? `<tr><td>Deposit Collected</td><td style="text-align:right" style="color:#16a34a">${printAmount(depositCollected)}</td></tr>` : ''}
+        ${depositCollected > 0 ? `<tr><td><b>Balance Deposit Pending</b></td><td style="text-align:right"><b>${printAmount(Math.max(0, estimate.deposit_required - depositCollected))}</b></td></tr>` : ''}
+      </table>
+
+      ${estimate.remarks ? `<div class="section-title">Remarks</div><p style="font-size:12px;color:#475569;">${estimate.remarks}</p>` : ''}
+
+      <div style="margin-top:40px;display:flex;justify-content:space-between;padding-top:20px;border-top:1px solid #e2e8f0;">
+        <div style="text-align:center;width:40%;">
+          <div style="border-top:1px solid #334155;padding-top:4px;font-size:11px;color:#64748b;">Patient / Attendant Signature</div>
+        </div>
+        <div style="text-align:center;width:40%;">
+          <div style="border-top:1px solid #334155;padding-top:4px;font-size:11px;color:#64748b;">Hospital Stamp & Signature</div>
+        </div>
+      </div>
+
+      <div style="margin-top:20px;font-size:10px;color:#94a3b8;text-align:center;">
+        This is an estimate only. Actual charges may vary. — Generated on ${new Date().toLocaleString("en-IN")}
+      </div>`;
+
+    printDocument(`Estimate_${patient.uhid}`, body);
+  };
+
   const handleCommitOrders = async () => {
     if (!hospitalId || !userId || !patient || !admissionId) return;
-    
+
     const hasDrugs = prescription.drugs.length > 0;
     const hasLabs = prescription.lab_orders.length > 0;
     const hasRads = prescription.radiology_orders.length > 0;
@@ -333,15 +442,10 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
 
     setSavingOrders(true);
     try {
-      // 1. Commit Medications
       if (hasDrugs) {
         const medsToInsert = prescription.drugs.map(d => ({
-          hospital_id: hospitalId,
-          admission_id: admissionId,
-          drug_name: d.drug_name,
-          dose: d.dose,
-          route: d.route,
-          frequency: d.frequency,
+          hospital_id: hospitalId, admission_id: admissionId,
+          drug_name: d.drug_name, dose: d.dose, route: d.route, frequency: d.frequency,
           ordered_by: userId,
           start_date: new Date().toISOString().split('T')[0],
           end_date: d.duration_days ? new Date(Date.now() + parseInt(d.duration_days) * 24 * 60 * 60 * 1000).toISOString().split('T')[0] : null,
@@ -351,24 +455,17 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
         if (medErr) throw medErr;
       }
 
-      // 2. Commit Lab Orders (with billing)
       if (hasLabs) {
-        // Fetch rates for billing
         const { data: masterTests } = await supabase.from("lab_test_master")
           .select("id, test_name, fee, gst_percent")
           .eq("hospital_id", hospitalId)
           .in("test_name", prescription.lab_orders.map(l => l.test_name));
 
         const created = await syncLabOrders({
-          hospitalId,
-          patientId: patient.id,
-          orderedBy: userId,
-          admissionId,
-          items: prescription.lab_orders
+          hospitalId, patientId: patient.id, orderedBy: userId, admissionId, items: prescription.lab_orders
         });
 
         if (created > 0) {
-          // Manual billing for the synced orders
           const subtotal = (masterTests || []).reduce((sum, t) => sum + Number(t.fee || 0), 0);
           const gstTotal = (masterTests || []).reduce((sum, t) => sum + (Number(t.fee || 0) * (Number(t.gst_percent || 0) / 100)), 0);
           const totalAmount = subtotal + gstTotal;
@@ -376,66 +473,41 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
           if (totalAmount > 0) {
             const billNum = await generateBillNumber(hospitalId, "LAB");
             const { data: bill } = await supabase.from("bills").insert({
-              hospital_id: hospitalId,
-              patient_id: patient.id,
-              admission_id: admissionId,
-              bill_number: billNum,
-              bill_type: "lab",
-              bill_status: "final",
+              hospital_id: hospitalId, patient_id: patient.id, admission_id: admissionId,
+              bill_number: billNum, bill_type: "lab", bill_status: "final",
               bill_date: new Date().toISOString().split("T")[0],
-              total_amount: totalAmount,
-              subtotal,
-              gst_amount: gstTotal,
-              payment_status: "unpaid",
-              created_by: userId,
+              total_amount: totalAmount, subtotal, gst_amount: gstTotal,
+              payment_status: "unpaid", created_by: userId,
             }).select("id").maybeSingle();
 
             if (bill) {
               await supabase.from("bill_line_items").insert((masterTests || []).map(t => ({
-                hospital_id: hospitalId,
-                bill_id: bill.id,
-                description: `Lab: ${t.test_name}`,
-                item_type: "lab",
-                quantity: 1,
-                unit_rate: t.fee,
-                taxable_amount: t.fee,
+                hospital_id: hospitalId, bill_id: bill.id,
+                description: `Lab: ${t.test_name}`, item_type: "lab",
+                quantity: 1, unit_rate: t.fee, taxable_amount: t.fee,
                 gst_percent: t.gst_percent,
                 gst_amount: Number(t.fee) * (Number(t.gst_percent || 0) / 100),
                 total_amount: Number(t.fee) * (1 + (Number(t.gst_percent || 0) / 100)),
-                source_module: "lab",
-                ordered_by: userId,
+                source_module: "lab", ordered_by: userId,
               })));
-
               await autoPostJournalEntry({
-                triggerEvent: 'bill_finalized_lab',
-                sourceModule: 'lab',
-                sourceId: bill.id,
-                amount: totalAmount,
-                description: `Lab Revenue - Bill ${billNum}`,
-                hospitalId,
-                postedBy: userId,
+                triggerEvent: 'bill_finalized_lab', sourceModule: 'lab', sourceId: bill.id,
+                amount: totalAmount, description: `Lab Revenue - Bill ${billNum}`, hospitalId, postedBy: userId,
               });
-
               await recalculateBillTotalsSafe(bill.id);
             }
           }
         }
       }
 
-      // 3. Commit Radiology Orders (with billing)
       if (hasRads) {
-        // Fetch study master for rates
         const { data: masterStudies } = await supabase.from("radiology_study_master")
           .select("study_name, fee, gst_percent")
           .eq("hospital_id", hospitalId)
           .in("study_name", prescription.radiology_orders.map(r => r.study_name));
 
         const created = await syncRadiologyOrders({
-          hospitalId,
-          patientId: patient.id,
-          orderedBy: userId,
-          admissionId,
-          items: prescription.radiology_orders
+          hospitalId, patientId: patient.id, orderedBy: userId, admissionId, items: prescription.radiology_orders
         });
 
         if (created > 0) {
@@ -446,46 +518,27 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
           if (totalAmount > 0) {
             const billNum = await generateBillNumber(hospitalId, "RAD");
             const { data: bill } = await supabase.from("bills").insert({
-              hospital_id: hospitalId,
-              patient_id: patient.id,
-              admission_id: admissionId,
-              bill_number: billNum,
-              bill_type: "radiology",
-              bill_status: "final",
+              hospital_id: hospitalId, patient_id: patient.id, admission_id: admissionId,
+              bill_number: billNum, bill_type: "radiology", bill_status: "final",
               bill_date: new Date().toISOString().split("T")[0],
-              total_amount: totalAmount,
-              subtotal,
-              gst_amount: gstTotal,
-              payment_status: "unpaid",
-              created_by: userId,
+              total_amount: totalAmount, subtotal, gst_amount: gstTotal,
+              payment_status: "unpaid", created_by: userId,
             }).select("id").maybeSingle();
 
             if (bill) {
               await supabase.from("bill_line_items").insert((masterStudies || []).map(s => ({
-                hospital_id: hospitalId,
-                bill_id: bill.id,
-                description: `Rad: ${s.study_name}`,
-                item_type: "radiology",
-                quantity: 1,
-                unit_rate: s.fee,
-                taxable_amount: s.fee,
+                hospital_id: hospitalId, bill_id: bill.id,
+                description: `Rad: ${s.study_name}`, item_type: "radiology",
+                quantity: 1, unit_rate: s.fee, taxable_amount: s.fee,
                 gst_percent: s.gst_percent,
                 gst_amount: Number(s.fee) * (Number(s.gst_percent || 0) / 100),
                 total_amount: Number(s.fee) * (1 + (Number(s.gst_percent || 0) / 100)),
-                source_module: "radiology",
-                ordered_by: userId,
+                source_module: "radiology", ordered_by: userId,
               })));
-
               await autoPostJournalEntry({
-                triggerEvent: 'bill_finalized_radiology',
-                sourceModule: 'radiology',
-                sourceId: bill.id,
-                amount: totalAmount,
-                description: `Radiology Revenue - Bill ${billNum}`,
-                hospitalId,
-                postedBy: userId,
+                triggerEvent: 'bill_finalized_radiology', sourceModule: 'radiology', sourceId: bill.id,
+                amount: totalAmount, description: `Radiology Revenue - Bill ${billNum}`, hospitalId, postedBy: userId,
               });
-
               await recalculateBillTotalsSafe(bill.id);
             }
           }
@@ -506,6 +559,50 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
     <>
     {waCard}
     <div className="flex-1 flex flex-col overflow-hidden bg-muted/30">
+
+      {/* MEWS ≥ 5 escalation alert */}
+      {latestMews !== null && latestMews >= 5 && (
+        <div className="flex-shrink-0 w-full bg-red-600 px-5 py-2 flex items-center gap-2 text-white">
+          <AlertTriangle className="h-4 w-4 shrink-0 animate-pulse" />
+          <span className="text-xs font-bold">⚠️ MEWS Score {latestMews} — Escalate to on-call doctor immediately.</span>
+        </div>
+      )}
+
+      {/* MLC — undocumented banner (blocking) */}
+      {mlcCaseStatus === false && (
+        <button
+          onClick={() => setShowMlcModal(true)}
+          className="flex-shrink-0 w-full bg-red-50 border-b border-red-400 px-5 py-2 flex items-center gap-2 text-red-800 hover:bg-red-100 transition-colors text-left"
+        >
+          <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+          <span className="text-xs font-bold">⚠️ MLC CASE: Details not documented. Click here to complete. Discharge is blocked until MLC details are recorded.</span>
+        </button>
+      )}
+
+      {/* Missing estimate banner */}
+      {estimate === null && (
+        <button
+          onClick={() => setShowEstimateModal(true)}
+          className="flex-shrink-0 w-full bg-amber-50 border-b border-amber-300 px-5 py-2 flex items-center gap-2 text-amber-800 hover:bg-amber-100 transition-colors text-left"
+        >
+          <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+          <span className="text-xs font-semibold">⚠️ Estimate &amp; deposit not recorded. Click here to add.</span>
+        </button>
+      )}
+
+      {/* Pre-Auth Required banner for insurance admissions */}
+      {preAuthNeeded && (
+        <button
+          onClick={() => navigate("/insurance")}
+          className="flex-shrink-0 w-full bg-blue-50 border-b border-blue-300 px-5 py-2 flex items-center gap-2 text-blue-800 hover:bg-blue-100 transition-colors text-left"
+        >
+          <ClipboardList className="h-4 w-4 text-blue-600 shrink-0" />
+          <span className="text-xs font-semibold">
+            📋 Pre-Authorization Required — {(bed?.admission as any)?.payer_type?.toUpperCase() || "Insurance"} admission. Click to raise Pre-Auth in Insurance module.
+          </span>
+        </button>
+      )}
+
       {/* Patient Header */}
       <div className="flex-shrink-0 h-[72px] bg-card border-b border-border px-5 flex items-center gap-4">
         <div className="w-10 h-10 rounded-full bg-[#1A2F5A] text-white flex items-center justify-center text-sm font-bold flex-shrink-0">
@@ -516,6 +613,11 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
           <div className="flex items-center gap-2 flex-wrap">
             {patient?.uhid && <span className="text-[11px] bg-muted text-muted-foreground px-1.5 py-px rounded">{patient.uhid}</span>}
             {(adm as any).admission_number && <span className="text-[11px] bg-blue-50 text-blue-600 px-1.5 py-px rounded">{(adm as any).admission_number}</span>}
+            {(adm as any).is_mlc && (
+              <span className="text-[11px] bg-red-600 text-white px-1.5 py-px rounded font-bold">
+                {(adm as any).mlc_number || "MLC"}
+              </span>
+            )}
             {patientAge !== null && patient?.gender && <span className="text-[11px] text-muted-foreground">{patientAge}y · {patient.gender}</span>}
             {patient?.blood_group && <span className="text-[11px] bg-red-50 text-red-600 px-1.5 py-px rounded">{patient.blood_group}</span>}
           </div>
@@ -537,8 +639,25 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
               NEWS2 {latestNews2}
             </span>
           )}
+          {latestMews !== null && (
+            <span
+              className={cn(
+                "text-[11px] font-semibold px-2 py-0.5 rounded-full",
+                latestMews >= 5 ? "bg-red-100 text-red-700" :
+                latestMews >= 3 ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"
+              )}
+              title={`Latest MEWS: ${latestMews}`}
+            >
+              MEWS {latestMews}
+            </span>
+          )}
           <span className="text-[11px] text-muted-foreground">Day {adm.los_days}</span>
           <span className={cn("text-[11px] font-medium px-2 py-0.5 rounded-full", typeColors[adm.admission_type] || "bg-muted text-muted-foreground")}>{adm.admission_type}</span>
+          {estimate && (
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-emerald-700" onClick={handlePrintEstimate} title="Print Estimate">
+              <FileText className="h-4 w-4" />
+            </Button>
+          )}
           <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-[#1A2F5A]" onClick={handlePrintCaseSheet} title="Print Case Sheet">
             <Printer className="h-4 w-4" />
           </Button>
@@ -558,6 +677,8 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
             { v: "documents", l: "Documents" },
             { v: "advance", l: "💰 Advance" },
             { v: "ledger", l: "📋 Ledger" },
+            { v: "nursing_kardex", l: "🩺 Kardex" },
+            { v: "ipc_devices", l: "🦠 IPC/Devices" },
             ...(specialty ? [{ v: "specialty", l: `${specialtyTabMeta[specialty].icon} ${specialtyTabMeta[specialty].label}` }] : []),
           ].map((t) => (
             <TabsTrigger key={t.v} value={t.v}
@@ -613,6 +734,24 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
               <IPDLedgerTab admissionId={admissionId} patientId={patient.id} hospitalId={hospitalId} />
             )}
           </TabsContent>
+          <TabsContent value="nursing_kardex" className="h-full m-0">
+            <NursingKardexTab
+              admissionId={admissionId}
+              hospitalId={hospitalId}
+              userId={userId}
+              patientId={patient?.id}
+            />
+          </TabsContent>
+
+          <TabsContent value="ipc_devices" className="h-full m-0">
+            <IPDDeviceTab
+              admissionId={admissionId}
+              hospitalId={hospitalId}
+              userId={userId}
+              patientId={patient?.id}
+            />
+          </TabsContent>
+
           {specialty && hospitalId && patient && (
             <TabsContent value="specialty" className="h-full m-0">
               {specialty === 'obstetric' && <ObstetricSheet patientId={patient.id} hospitalId={hospitalId} admissionId={admissionId} />}
@@ -650,13 +789,10 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
           {patient && hospitalId && (
             <Button size="sm" variant="outline" className="text-xs h-8 border-teal-300 text-teal-700 hover:bg-teal-50" onClick={async () => {
               const { error } = await supabase.from("physio_referrals").insert({
-                hospital_id: hospitalId,
-                patient_id: patient.id,
-                admission_id: admissionId,
+                hospital_id: hospitalId, patient_id: patient.id, admission_id: admissionId,
                 referred_by: userId || undefined,
                 diagnosis: (adm as any).admitting_diagnosis || "Physiotherapy referral",
-                goals: [],
-                urgency: "routine",
+                goals: [], urgency: "routine",
               } as any);
               if (error) { toast({ title: "Referral failed", description: error.message, variant: "destructive" }); return; }
               toast({ title: "↗ Referred to Physiotherapy" });
@@ -672,7 +808,18 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
           )}
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" className="text-xs h-8 border-amber-300 text-amber-700 hover:bg-amber-50" onClick={handleInitiateDischarge}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs h-8 border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => {
+              if (mlcCaseStatus === false) {
+                toast({ title: "Cannot discharge — MLC details not documented", variant: "destructive" });
+                return;
+              }
+              handleInitiateDischarge();
+            }}
+          >
             🏠 Initiate Discharge
           </Button>
           <Button size="sm" variant="outline" className="text-xs h-8" onClick={() => setShowTransfer(true)}>
@@ -719,6 +866,36 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
         currentBedId={bed.id}
         patientName={patient.full_name}
         onSuccess={onRefresh}
+      />
+    )}
+
+    {/* MLC Details modal — opened from the MLC undocumented banner */}
+    {showMlcModal && hospitalId && patient && (
+      <MLCDetailsModal
+        hospitalId={hospitalId}
+        patientId={patient.id}
+        patientName={patient.full_name}
+        admissionId={admissionId}
+        onClose={() => setShowMlcModal(false)}
+        onSaved={() => { setShowMlcModal(false); onRefresh(); }}
+      />
+    )}
+
+    {/* Estimate-only modal — opened from the missing estimate banner */}
+    {showEstimateModal && hospitalId && patient && (
+      <AdmitPatientModal
+        open={showEstimateModal}
+        onClose={() => setShowEstimateModal(false)}
+        hospitalId={hospitalId}
+        estimateOnlyMode
+        existingAdmissionId={admissionId}
+        existingPatient={{ id: patient.id, full_name: patient.full_name, uhid: patient.uhid }}
+        onAdmitted={() => {
+          setShowEstimateModal(false);
+          // Re-fetch estimate by resetting to undefined so the useEffect re-runs
+          setEstimate(undefined);
+          onRefresh();
+        }}
       />
     )}
     </>

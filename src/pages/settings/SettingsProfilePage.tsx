@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { ALL_PATIENT_LANGUAGES } from "@/lib/translateUtils";
 
 const SettingsProfilePage: React.FC = () => {
   const navigate = useNavigate();
@@ -16,6 +17,7 @@ const SettingsProfilePage: React.FC = () => {
     nabl_accreditation_number: "", nabl_valid_upto: "",
     registration_80g: "", trust_pan: "",
   });
+  const [patientLanguages, setPatientLanguages] = useState<string[]>(["English"]);
 
   const { data: hospital } = useQuery({
     queryKey: ["settings-hospital"],
@@ -43,6 +45,8 @@ const SettingsProfilePage: React.FC = () => {
         registration_80g: (hospital as any).registration_80g || "",
         trust_pan: (hospital as any).trust_pan || "",
       });
+      const langs: string[] = (hospital as any).patient_languages || ["English"];
+      setPatientLanguages(langs.includes("English") ? langs : ["English", ...langs]);
     }
   }, [hospital]);
 
@@ -61,6 +65,7 @@ const SettingsProfilePage: React.FC = () => {
         nabl_valid_upto: form.nabl_valid_upto || null,
         registration_80g: form.registration_80g || null,
         trust_pan: form.trust_pan || null,
+        patient_languages: patientLanguages,
       } as any).eq("id", hospital.id);
       if (error) throw error;
     },
@@ -138,6 +143,47 @@ const SettingsProfilePage: React.FC = () => {
             <div className="flex items-center gap-2">
               <input type="color" value={form.primary_color} onChange={(e) => setForm({ ...form, primary_color: e.target.value })} className="h-10 w-10 rounded border border-input cursor-pointer" />
               <Input value={form.primary_color} onChange={(e) => setForm({ ...form, primary_color: e.target.value })} className="h-10 w-28 font-mono text-sm" />
+            </div>
+          </div>
+
+          {/* Preferred Patient Languages */}
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">
+              Preferred Patient Languages
+            </label>
+            <p className="text-[11px] text-muted-foreground mb-2">
+              Languages available for discharge instructions, OPD prescription advice, and patient WhatsApp messages.
+              English is always included.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {ALL_PATIENT_LANGUAGES.map((lang) => {
+                const isSelected = patientLanguages.includes(lang.code);
+                const isEnglish  = lang.code === "English";
+                return (
+                  <button
+                    key={lang.code}
+                    type="button"
+                    disabled={isEnglish}
+                    onClick={() => {
+                      if (isEnglish) return;
+                      setPatientLanguages((prev) =>
+                        isSelected
+                          ? prev.filter((l) => l !== lang.code)
+                          : [...prev, lang.code]
+                      );
+                    }}
+                    className={[
+                      "px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+                      isSelected
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-muted-foreground border-border hover:bg-muted",
+                      isEnglish ? "opacity-60 cursor-not-allowed" : "cursor-pointer",
+                    ].join(" ")}
+                  >
+                    {lang.native !== lang.label ? `${lang.native} ${lang.label}` : lang.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

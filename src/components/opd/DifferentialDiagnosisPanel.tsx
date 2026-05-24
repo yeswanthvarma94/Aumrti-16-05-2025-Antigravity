@@ -6,6 +6,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertCircle, AlertTriangle, Stethoscope, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import AIAttestationModal from "@/components/ai/AIAttestationModal";
+import { useAIFeatureFlag } from "@/hooks/useAIFeatureFlag";
 
 interface Differential {
   rank: number;
@@ -33,6 +35,9 @@ interface Props {
   examination?: string;
   history?: string;
   patientContext?: string;
+  hospitalId?: string | null;
+  patientId?: string | null;
+  encounterId?: string | null;
   onSelectDiagnosis?: (diagnosis: string, icd10: string) => void;
 }
 
@@ -46,11 +51,24 @@ const CONFIDENCE_COLOR = (c: number) =>
   c >= 0.7 ? "text-red-600" : c >= 0.5 ? "text-amber-600" : "text-slate-500";
 
 const DifferentialDiagnosisPanel: React.FC<Props> = ({
-  chiefComplaint, age, gender, vitals, examination, history, patientContext, onSelectDiagnosis,
+  chiefComplaint, age, gender, vitals, examination, history, patientContext,
+  hospitalId, patientId, encounterId,
+  onSelectDiagnosis,
 }) => {
+  const ddxEnabled = useAIFeatureFlag("differential_dx");
   const [result, setResult] = useState<DDxResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [pendingDiff, setPendingDiff] = useState<Differential | null>(null);
+
+  if (!ddxEnabled) {
+    return (
+      <div className="border rounded-lg px-3 py-2.5 bg-muted/30 flex items-center gap-2">
+        <Stethoscope className="h-4 w-4 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">AI Differential Diagnosis is disabled by your administrator.</span>
+      </div>
+    );
+  }
 
   const generate = async () => {
     if (!chiefComplaint.trim()) {
@@ -176,7 +194,7 @@ const DifferentialDiagnosisPanel: React.FC<Props> = ({
                         size="sm"
                         variant="outline"
                         className="h-7 text-xs w-full mt-1"
-                        onClick={() => { onSelectDiagnosis(d.diagnosis, d.icd10); toast.success(`Diagnosis set to ${d.diagnosis}`); }}
+                        onClick={() => setPendingDiff(d)}
                       >
                         → Use as Diagnosis
                       </Button>
@@ -194,6 +212,38 @@ const DifferentialDiagnosisPanel: React.FC<Props> = ({
             </div>
           )}
         </div>
+      )}
+
+      {pendingDiff && onSelectDiagnosis && (
+        <AIAttestationModal
+          open={!!pendingDiff}
+          title="AI Differential Diagnosis — Doctor Review Required"
+          feature="differential_dx"
+          sourceId={encounterId ?? undefined}
+          hospitalId={hospitalId ?? ""}
+          aiOutput={pendingDiff as unknown as Record<string, unknown>}
+          previewContent={[
+            `Diagnosis: ${pendingDiff.diagnosis} (${pendingDiff.icd10})`,
+            `Urgency: ${pendingDiff.urgency} | Confidence: ${Math.round(pendingDiff.confidence * 100)}%`,
+            pendingDiff.supporting_features.length > 0
+              ? `\nSupporting:\n${pendingDiff.supporting_features.map(f => `  + ${f}`).join("\n")}`
+              : "",
+            pendingDiff.against_features.length > 0
+              ? `\nAgainst:\n${pendingDiff.against_features.map(f => `  - ${f}`).join("\n")}`
+              : "",
+            pendingDiff.recommended_investigations.length > 0
+              ? `\nInvestigations: ${pendingDiff.recommended_investigations.join(", ")}`
+              : "",
+          ].filter(Boolean).join("\n")}
+          initialEditableText={pendingDiff.diagnosis}
+          editableLabel="Diagnosis Text (edit before saving)"
+          onAccept={(editedText) => {
+            onSelectDiagnosis(editedText, pendingDiff.icd10);
+            toast.success(`Diagnosis set to ${editedText}`);
+            setPendingDiff(null);
+          }}
+          onDiscard={() => setPendingDiff(null)}
+        />
       )}
     </div>
   );

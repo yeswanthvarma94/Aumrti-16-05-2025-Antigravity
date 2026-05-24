@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { format, isToday, addDays } from "date-fns";
 import type { OTSchedule } from "@/pages/ot/OTPage";
 import { formatDateForQuery } from "@/pages/ot/OTPage";
+import OTUtilizationTab from "@/components/ot/tabs/OTUtilizationTab";
 
 interface Props {
   schedules: OTSchedule[];
@@ -20,6 +21,7 @@ const OTInfoPanel: React.FC<Props> = ({ schedules, selectedDate, onSelectSchedul
   const [upcomingCases, setUpcomingCases] = useState<any[]>([]);
   const [allBookingsOpen, setAllBookingsOpen] = useState(false);
   const [allBookings, setAllBookings] = useState<any[]>([]);
+  const [showUtilization, setShowUtilization] = useState(false);
 
   const total = schedules.length;
   const completed = schedules.filter((s) => s.status === "completed").length;
@@ -176,6 +178,12 @@ const OTInfoPanel: React.FC<Props> = ({ schedules, selectedDate, onSelectSchedul
           >
             📅 View All Bookings →
           </button>
+          <button
+            onClick={() => setShowUtilization(true)}
+            className="w-full text-left bg-muted text-foreground/80 text-xs px-3 py-2 rounded-md hover:bg-accent transition-colors active:scale-[0.98]"
+          >
+            📊 OT Utilization Report →
+          </button>
           {["📋 OT List Today", "✅ WHO Compliance"].map((label) => (
             <button
               key={label}
@@ -186,6 +194,21 @@ const OTInfoPanel: React.FC<Props> = ({ schedules, selectedDate, onSelectSchedul
           ))}
         </div>
       </div>
+
+      {/* OT Utilization Report Modal */}
+      {showUtilization && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowUtilization(false)}>
+          <div className="bg-card rounded-2xl w-full max-w-[560px] max-h-[85vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-border flex-shrink-0">
+              <h2 className="text-lg font-bold text-foreground">📊 OT Utilization Report</h2>
+              <button onClick={() => setShowUtilization(false)} className="text-muted-foreground hover:text-foreground text-lg">×</button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <OTUtilizationTab hospitalId={hospitalId} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* All Bookings Modal */}
       {allBookingsOpen && (

@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { callAI } from "@/lib/aiProvider";
 import { toast } from "sonner";
 import { logNABHEvidence } from "@/lib/nabh-evidence";
+import { logRecordAccess } from "@/lib/ims";
 import { logAudit } from "@/lib/auditLog";
 import { formatDateIST } from "@/lib/dateUtils";
 
@@ -29,6 +30,8 @@ const DischargeSummaryGenerator: React.FC<Props> = ({ admissionId, hospitalId, b
     primary_icd_desc: string | null;
     mrd_locked_at: string | null;
   } | null>(null);
+  const [dischargeWarnings, setDischargeWarnings] = useState<string[]>([]);
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
 
   useEffect(() => {
     (supabase as any)
@@ -169,6 +172,38 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
     setGenerating(false);
   };
 
+  const checkDischargeCompleteness = async (): Promise<string[]> => {
+    const warnings: string[] = [];
+    const now = new Date();
+    const since24h = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
+    const since2h = new Date(now.getTime() - 2 * 3600 * 1000).toISOString();
+
+    // Check: at least 1 nursing vitals entry in last 24h
+    const { count: vitalsCount } = await (supabase as any)
+      .from("nursing_vitals")
+      .select("id", { count: "exact", head: true })
+      .eq("admission_id", admissionId)
+      .gte("recorded_at", since24h);
+
+    if ((vitalsCount ?? 0) === 0) {
+      warnings.push("No nursing vitals recorded in the last 24 hours.");
+    }
+
+    // Check: no pending MAR entries older than 2 hours
+    const { count: pendingMar } = await (supabase as any)
+      .from("med_admin_records")
+      .select("id", { count: "exact", head: true })
+      .eq("admission_id", admissionId)
+      .eq("status", "pending")
+      .lt("scheduled_time", since2h);
+
+    if ((pendingMar ?? 0) > 0) {
+      warnings.push(`${pendingMar} medication dose(s) are overdue (pending for more than 2 hours).`);
+    }
+
+    return warnings;
+  };
+
   const signSummary = async () => {
     if (!summary.trim()) {
       toast.error("Summary is empty");
@@ -177,6 +212,15 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
     if (!billingCleared) {
       toast.error("Cannot discharge — billing not cleared");
       return;
+    }
+
+    // Run completeness check (only once — skip if already acknowledged)
+    if (!warningsAcknowledged) {
+      const warnings = await checkDischargeCompleteness();
+      if (warnings.length > 0) {
+        setDischargeWarnings(warnings);
+        return;
+      }
     }
 
     setSigning(true);
@@ -265,6 +309,7 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
 
   const handlePrint = async () => {
     if (!summary) return;
+    logRecordAccess({ hospitalId, recordType: "IPD_Record", recordId: admissionId, action: "print" });
 
     const { data: hospital } = await supabase.from("hospitals").select("name, address").eq("id", hospitalId).maybeSingle();
     const { data: patient } = await supabase.from("admissions")
@@ -356,6 +401,36 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
           {(!icdStatus || icdStatus.status === "pending") && <span>ICD Coding Pending</span>}
         </div>
       </div>
+
+      {/* Discharge completeness warnings */}
+      {dischargeWarnings.length > 0 && !warningsAcknowledged && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+            <p className="text-xs font-bold text-amber-800">Discharge Checklist — Issues Found</p>
+          </div>
+          <ul className="text-xs text-amber-800 space-y-1 pl-5 list-disc">
+            {dischargeWarnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+          <div className="flex gap-2 pt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1 h-8 text-xs border-amber-400 text-amber-700"
+              onClick={() => setDischargeWarnings([])}
+            >
+              Go Back
+            </Button>
+            <Button
+              size="sm"
+              className="flex-1 h-8 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => { setWarningsAcknowledged(true); setDischargeWarnings([]); }}
+            >
+              Acknowledge & Proceed
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2">
         <Button variant="outline" onClick={generate} disabled={generating} size="sm">

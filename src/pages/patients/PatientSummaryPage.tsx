@@ -7,14 +7,26 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   User, ArrowLeft, Activity, Pill, FlaskConical, Stethoscope,
-  BedDouble, Heart, AlertTriangle, RefreshCw, Calendar,
+  BedDouble, Heart, AlertTriangle, RefreshCw, Calendar, ClipboardList, ShieldCheck,
 } from "lucide-react";
+import ABHASearchPanel from "@/components/patients/ABHASearchPanel";
 import { cn } from "@/lib/utils";
+
+interface DiagnosisHistoryItem {
+  id: string;
+  diagnosis_text: string;
+  icd10_code: string | null;
+  icd10_description: string | null;
+  is_primary: boolean | null;
+  diagnosis_type: string | null;
+  created_at: string;
+  opd_encounters: { visit_date: string; chief_complaint: string | null } | null;
+}
 
 interface Patient {
   id: string; full_name: string; uhid: string; dob: string | null;
   gender: string | null; phone: string | null; blood_group: string | null;
-  allergy_history: string | null;
+  allergy_history: string | null; hospital_id?: string; abha_id?: string | null;
 }
 
 interface TimelineEvent {
@@ -43,6 +55,7 @@ const PatientSummaryPage: React.FC = () => {
   const [vitals, setVitals] = useState<any>(null);
   const [activeMeds, setActiveMeds] = useState<string[]>([]);
   const [upcoming, setUpcoming] = useState<any[]>([]);
+  const [diagnosisHistory, setDiagnosisHistory] = useState<DiagnosisHistoryItem[]>([]);
   const [aiContext, setAiContext] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -59,6 +72,7 @@ const PatientSummaryPage: React.FC = () => {
       { data: rxRows },
       { data: tokens },
       { data: ctx },
+      { data: diagData },
     ] = await Promise.all([
       supabase.from("patients").select("*").eq("id", patientId).maybeSingle(),
       (supabase as any).from("opd_encounters").select("id,chief_complaint,diagnosis,icd10_code,created_at,status").eq("patient_id", patientId).order("created_at", { ascending: false }).limit(20),
@@ -67,10 +81,12 @@ const PatientSummaryPage: React.FC = () => {
       (supabase as any).from("prescriptions").select("id,items,created_at").eq("patient_id", patientId).order("created_at", { ascending: false }).limit(5),
       (supabase as any).from("opd_tokens").select("id,visit_date,token_number,doctor_id,status").eq("patient_id", patientId).gte("visit_date", new Date().toISOString().slice(0, 10)).neq("status", "cancelled").limit(3),
       (supabase as any).from("patient_ai_context").select("*").eq("patient_id", patientId).maybeSingle(),
+      (supabase as any).from("opd_diagnoses").select("id,diagnosis_text,icd10_code,icd10_description,is_primary,diagnosis_type,created_at,opd_encounters(visit_date,chief_complaint)").eq("patient_id", patientId).in("diagnosis_type", ["confirmed", "chronic", "comorbid"]).order("created_at", { ascending: false }).limit(30),
     ]);
 
     setPatient(p);
     setAiContext(ctx);
+    setDiagnosisHistory(diagData || []);
     setUpcoming(tokens || []);
 
     // Build timeline
@@ -134,6 +150,10 @@ const PatientSummaryPage: React.FC = () => {
             <p className="text-sm font-bold">{patient.full_name}</p>
             <Badge variant="secondary" className="text-[10px]">{patient.uhid}</Badge>
             {patient.blood_group && <Badge variant="secondary" className="text-[10px] bg-red-50 text-red-700">{patient.blood_group}</Badge>}
+            {patient.abha_id
+              ? <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-700 gap-1"><ShieldCheck className="h-3 w-3" />ABHA ✓</Badge>
+              : <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-400">No ABHA</Badge>
+            }
           </div>
           <p className="text-xs text-muted-foreground">
             {calcAge(patient.dob)} · {patient.gender || "—"} · {patient.phone || "No phone"}
@@ -159,6 +179,11 @@ const PatientSummaryPage: React.FC = () => {
             <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
             <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
             <TabsTrigger value="ai_context" className="text-xs">AI Context</TabsTrigger>
+            <TabsTrigger value="abha" className="text-xs flex items-center gap-1">
+              <ShieldCheck className="h-3 w-3" />
+              ABHA
+              {patient.abha_id && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />}
+            </TabsTrigger>
           </TabsList>
 
           {/* Overview */}
@@ -207,6 +232,42 @@ const PatientSummaryPage: React.FC = () => {
                 }
               </div>
             </div>
+
+            {/* Diagnosis History */}
+            {diagnosisHistory.length > 0 && (
+              <div className="border rounded-lg p-4 bg-card mt-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <ClipboardList className="h-4 w-4 text-indigo-500" />
+                  <span className="text-xs font-semibold">Diagnosis History</span>
+                  <Badge variant="secondary" className="text-[10px]">{diagnosisHistory.length}</Badge>
+                </div>
+                <div className="space-y-1.5">
+                  {diagnosisHistory.map((d) => (
+                    <div key={d.id} className="flex items-start gap-2 py-1 border-b last:border-0">
+                      {d.is_primary && <span className="text-yellow-500 text-[10px] mt-0.5">★</span>}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{d.diagnosis_text}</p>
+                        {d.icd10_code && (
+                          <p className="text-[10px] text-muted-foreground font-mono">{d.icd10_code}{d.icd10_description ? ` — ${d.icd10_description}` : ""}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {d.diagnosis_type && (
+                          <Badge variant="secondary" className={cn("text-[9px] capitalize", {
+                            "bg-green-50 text-green-700": d.diagnosis_type === "confirmed",
+                            "bg-purple-50 text-purple-700": d.diagnosis_type === "chronic",
+                            "bg-blue-50 text-blue-700": d.diagnosis_type === "comorbid",
+                          })}>{d.diagnosis_type}</Badge>
+                        )}
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(d.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           {/* Timeline */}
@@ -279,6 +340,31 @@ const PatientSummaryPage: React.FC = () => {
               )
             }
           </TabsContent>
+
+          {/* ABHA tab */}
+          <TabsContent value="abha" className="flex-1 overflow-auto p-5 mt-0">
+            <div className="max-w-lg">
+              <div className="flex items-center gap-2 mb-4">
+                <ShieldCheck className="h-5 w-5 text-emerald-600" />
+                <div>
+                  <h3 className="text-sm font-bold">Ayushman Bharat Health Account (ABHA)</h3>
+                  <p className="text-xs text-muted-foreground">Link and manage this patient's ABHA ID for ABDM health record sharing</p>
+                </div>
+              </div>
+              {patient.hospital_id ? (
+                <ABHASearchPanel
+                  patientId={patient.id}
+                  hospitalId={patient.hospital_id}
+                  existingAbhaId={patient.abha_id}
+                  onLinked={(abhaId) => setPatient((prev) => prev ? { ...prev, abha_id: abhaId } : prev)}
+                  onUnlinked={() => setPatient((prev) => prev ? { ...prev, abha_id: null } : prev)}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading hospital context…</p>
+              )}
+            </div>
+          </TabsContent>
+
         </Tabs>
       </div>
     </div>

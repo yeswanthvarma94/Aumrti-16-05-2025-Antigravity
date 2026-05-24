@@ -163,8 +163,8 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
         .limit(1)
         .maybeSingle();
 
-      // Find batches (FEFO)
-      const { data: batchData } = await supabase
+      // Find batches (FEFO) — exclude quarantined and destroyed stock
+      const { data: batchData } = await (supabase as any)
         .from("drug_batches")
         .select("*")
         .eq("hospital_id", hospitalId)
@@ -172,6 +172,8 @@ const DispensingWorkspace: React.FC<Props> = ({ hospitalId, prescription, onDisp
         .gt("quantity_available", 0)
         .gt("expiry_date", new Date().toISOString().split("T")[0])
         .eq("is_active", true)
+        .neq("status", "quarantined")
+        .neq("status", "destroyed")
         .order("expiry_date", { ascending: true });
 
       const batches: BatchOption[] = (batchData || []).map(b => ({

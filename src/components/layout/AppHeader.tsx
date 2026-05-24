@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AlertTriangle } from "lucide-react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -185,6 +186,16 @@ const AppHeader: React.FC = () => {
             {online ? "Online" : "Offline"}
           </div>
         )}
+
+        {/* Global Report Event trigger */}
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("open-report-event"))}
+          title="Report a safety event or complaint"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-medium transition-colors border border-amber-500/20"
+        >
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {!isMobile && "Report Event"}
+        </button>
 
         <NotificationCentre hospitalId={hospitalId} />
 

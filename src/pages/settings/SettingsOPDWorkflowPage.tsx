@@ -1,13 +1,25 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import SettingsPageWrapper from "@/components/settings/SettingsPageWrapper";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useHospitalId } from "@/hooks/useHospitalId";
+import { Plus, Trash2, Tag } from "lucide-react";
+
+interface RevisitRule {
+  within_days: number;
+  same_doctor: boolean;
+  discount_type: "free" | "percent" | "fixed";
+  amount: number;
+}
 
 const SettingsOPDWorkflowPage: React.FC = () => {
   const { toast } = useToast();
+  const { hospitalId } = useHospitalId();
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState({
     queueType: "token",
@@ -21,7 +33,53 @@ const SettingsOPDWorkflowPage: React.FC = () => {
     lateArrival: "wait",
   });
 
-  const handleSave = () => { setSaving(true); setTimeout(() => { toast({ title: "OPD config saved" }); setSaving(false); }, 500); };
+  // Revisit rules
+  const [revisitEnabled, setRevisitEnabled] = useState(false);
+  const [revisitRules, setRevisitRules] = useState<RevisitRule[]>([
+    { within_days: 7, same_doctor: true, discount_type: "free", amount: 0 },
+  ]);
+
+  useEffect(() => {
+    if (!hospitalId) return;
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("hospital_settings")
+        .select("value")
+        .eq("hospital_id", hospitalId)
+        .eq("key", "opd_revisit_rules")
+        .maybeSingle();
+      if (data?.value) {
+        setRevisitEnabled(data.value.enabled ?? false);
+        if (Array.isArray(data.value.rules)) setRevisitRules(data.value.rules);
+      }
+    })();
+  }, [hospitalId]);
+
+  const addRule = () => {
+    setRevisitRules(prev => [...prev, { within_days: 30, same_doctor: true, discount_type: "percent", amount: 50 }]);
+  };
+
+  const removeRule = (i: number) => {
+    setRevisitRules(prev => prev.filter((_, idx) => idx !== i));
+  };
+
+  const updateRule = (i: number, partial: Partial<RevisitRule>) => {
+    setRevisitRules(prev => prev.map((r, idx) => idx === i ? { ...r, ...partial } : r));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    if (hospitalId) {
+      await (supabase as any).from("hospital_settings").upsert({
+        hospital_id: hospitalId,
+        key: "opd_revisit_rules",
+        value: { enabled: revisitEnabled, rules: revisitRules },
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "hospital_id,key" });
+    }
+    setSaving(false);
+    toast({ title: "OPD config saved" });
+  };
 
   return (
     <SettingsPageWrapper title="OPD Queue Config" onSave={handleSave} saving={saving}>
@@ -87,6 +145,92 @@ const SettingsOPDWorkflowPage: React.FC = () => {
               <div key={o.v} className="flex items-center gap-2"><RadioGroupItem value={o.v} id={`la-${o.v}`} /><Label htmlFor={`la-${o.v}`} className="font-normal">{o.l}</Label></div>
             ))}
           </RadioGroup>
+        </section>
+
+        {/* Revisit Discount Rules */}
+        <section>
+          <div className="flex items-center gap-3 mb-3">
+            <Tag size={15} className="text-emerald-600" />
+            <h2 className="text-sm font-semibold text-foreground">Revisit Rules</h2>
+            <Switch checked={revisitEnabled} onCheckedChange={setRevisitEnabled} />
+            <span className="text-xs text-muted-foreground">{revisitEnabled ? "Enabled" : "Disabled"}</span>
+          </div>
+          {revisitEnabled && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                When a returning patient visits within the configured window, the consultation fee is automatically discounted.
+              </p>
+              <div className="border border-border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-muted/40">
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground">Within (days)</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground">Same Doctor</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground">Discount Type</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-muted-foreground">Amount / %</th>
+                      <th className="px-3 py-2 w-10" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {revisitRules.map((rule, i) => (
+                      <tr key={i} className="border-t border-border/50">
+                        <td className="px-3 py-2">
+                          <Input
+                            type="number"
+                            value={rule.within_days}
+                            onChange={e => updateRule(i, { within_days: Number(e.target.value) || 0 })}
+                            className="h-7 w-20 text-sm"
+                            min={1}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <Switch
+                            checked={rule.same_doctor}
+                            onCheckedChange={v => updateRule(i, { same_doctor: v })}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={rule.discount_type}
+                            onChange={e => updateRule(i, { discount_type: e.target.value as RevisitRule["discount_type"] })}
+                            className="h-7 px-2 border border-border rounded-md text-xs bg-background"
+                          >
+                            <option value="free">Free (₹0)</option>
+                            <option value="percent">Percent off (%)</option>
+                            <option value="fixed">Fixed amount (₹)</option>
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          {rule.discount_type !== "free" && (
+                            <Input
+                              type="number"
+                              value={rule.amount}
+                              onChange={e => updateRule(i, { amount: Number(e.target.value) || 0 })}
+                              className="h-7 w-24 text-sm"
+                              min={0}
+                              max={rule.discount_type === "percent" ? 100 : undefined}
+                            />
+                          )}
+                          {rule.discount_type === "free" && <span className="text-xs text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => removeRule(i)} className="text-muted-foreground hover:text-destructive">
+                            <Trash2 size={13} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <Button size="sm" variant="outline" className="gap-1 text-xs h-8" onClick={addRule}>
+                <Plus size={12} /> Add Rule
+              </Button>
+              <p className="text-[11px] text-muted-foreground">
+                Rules are evaluated in order — first matching rule wins. "Within 7 days = Free" means returning patient within 7 days pays ₹0.
+              </p>
+            </div>
+          )}
         </section>
       </div>
     </SettingsPageWrapper>

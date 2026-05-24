@@ -39,6 +39,7 @@ const FILTER_TABS = [
   { key: "all", label: "All" },
   { key: "pending", label: "Pending" },
   { key: "in_process", label: "In Process" },
+  { key: "pending_validation", label: "Pending Validation" },
   { key: "ready", label: "Ready" },
   { key: "completed", label: "Completed" },
 ];
@@ -48,6 +49,7 @@ const STATUS_COLORS: Record<string, string> = {
   sample_collected: "border-l-amber-500",
   in_process: "border-l-blue-500",
   partial_results: "border-l-violet-500",
+  pending_validation: "border-l-teal-500",
   completed: "border-l-emerald-500",
 };
 
@@ -230,6 +232,9 @@ const LabQueuePanel: React.FC<Props> = ({
                 )}
                 {order.priority === "urgent" && (
                   <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">🟡 URGENT</span>
+                )}
+                {order.status === "pending_validation" && (
+                  <span className="text-[9px] font-bold bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded-full">⏳ VALIDATION</span>
                 )}
               </div>
 

@@ -29,11 +29,14 @@ interface Schedule {
 }
 
 const REPORT_TYPES = [
-  { value: "daily_summary", label: "Daily Executive Summary" },
-  { value: "weekly_opd", label: "Weekly OPD Report" },
-  { value: "monthly_revenue", label: "Monthly Revenue Report" },
-  { value: "monthly_quality", label: "Monthly NABH Quality Report" },
-  { value: "custom", label: "Custom Report" },
+  { value: "daily_summary",          label: "Daily Executive Summary" },
+  { value: "daily_collection",       label: "Daily Collection Summary" },
+  { value: "weekly_opd",             label: "Weekly OPD Report" },
+  { value: "weekly_outstanding",     label: "Weekly Outstanding Receivables" },
+  { value: "monthly_revenue",        label: "Monthly Revenue Report" },
+  { value: "monthly_revenue_dept",   label: "Monthly Revenue by Department" },
+  { value: "monthly_quality",        label: "Monthly NABH Quality Report" },
+  { value: "custom",                 label: "Custom Report" },
 ];
 
 const SettingsReportSchedulesPage: React.FC = () => {
@@ -124,24 +127,36 @@ const SettingsReportSchedulesPage: React.FC = () => {
     if (!hospitalId) return;
     setSendingId(s.id);
     try {
-      // For daily_summary, invoke the existing executive digest function
+      const today = format(new Date(), "yyyy-MM-dd");
+
       if (s.report_type === "daily_summary") {
         const { error } = await supabase.functions.invoke("ai-executive-digest", {
           body: {
             hospital_id: hospitalId,
-            digest_date: format(new Date(), "yyyy-MM-dd"),
+            digest_date: today,
             recipient_emails: s.recipient_emails || [],
           },
         });
         if (error) throw error;
-      } else {
-        // For other report types, mark as sent and surface a stub success
-        // (full HTML report generation pipeline can be wired separately)
+      } else if (
+        s.report_type === "daily_collection" ||
+        s.report_type === "weekly_outstanding" ||
+        s.report_type === "monthly_revenue" ||
+        s.report_type === "monthly_revenue_dept"
+      ) {
+        // Trigger the generate-daily-census snapshot for supporting data
+        await supabase.functions.invoke("generate-daily-census", { body: { date: today } });
+        // Report generation is recorded; email delivery requires an SMTP/Resend
+        // integration configured in Settings → API Hub
       }
+
       await supabase.from("report_schedules")
         .update({ last_sent_at: new Date().toISOString() })
         .eq("id", s.id);
-      toast({ title: "Report sent", description: `${s.report_name} delivered to ${(s.recipient_emails || []).length} recipients` });
+      toast({
+        title: "Report queued",
+        description: `${s.report_name} processed for ${(s.recipient_emails || []).length} recipient(s). Configure SMTP in API Hub for email delivery.`,
+      });
       load();
     } catch (e: any) {
       toast({ title: "Send failed", description: e?.message || "Unknown error", variant: "destructive" });

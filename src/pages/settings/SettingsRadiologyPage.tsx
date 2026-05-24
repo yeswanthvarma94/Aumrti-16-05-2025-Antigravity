@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import SettingsPageWrapper from "@/components/settings/SettingsPageWrapper";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Plus, Search, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, Shield } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -40,6 +40,57 @@ const SettingsRadiologyPage: React.FC = () => {
   const [addStudyModalityId, setAddStudyModalityId] = useState<string | null>(null);
   const [addStudyModalityType, setAddStudyModalityType] = useState("");
   const [studyForm, setStudyForm] = useState({ study_name: "", fee: "0" });
+
+  // PCPNDT compliance settings
+  const [pcpndtMachineName, setPcpndtMachineName] = useState("");
+  const [pcpndtMachineReg, setPcpndtMachineReg] = useState("");
+  const [pcpndtDoctorReg, setPcpndtDoctorReg] = useState("");
+  const [pcpndtSettingsId, setPcpndtSettingsId] = useState<string | null>(null);
+  const [pcpndtSaving, setPcpndtSaving] = useState(false);
+
+  useEffect(() => {
+    if (!hospitalId) return;
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("pcpndt_settings")
+        .select("*")
+        .eq("hospital_id", hospitalId)
+        .maybeSingle();
+      if (data) {
+        setPcpndtSettingsId(data.id);
+        setPcpndtMachineName(data.machine_name || "");
+        setPcpndtMachineReg(data.machine_registration_number || "");
+        setPcpndtDoctorReg(data.doctor_pcpndt_registration || "");
+      }
+    })();
+  }, [hospitalId]);
+
+  const savePcpndtSettings = async () => {
+    if (!hospitalId) return;
+    setPcpndtSaving(true);
+    const payload = {
+      hospital_id: hospitalId,
+      machine_name: pcpndtMachineName.trim() || null,
+      machine_registration_number: pcpndtMachineReg.trim() || null,
+      doctor_pcpndt_registration: pcpndtDoctorReg.trim() || null,
+      updated_at: new Date().toISOString(),
+    };
+    let error: any;
+    if (pcpndtSettingsId) {
+      const res = await (supabase as any).from("pcpndt_settings").update(payload).eq("id", pcpndtSettingsId);
+      error = res.error;
+    } else {
+      const res = await (supabase as any).from("pcpndt_settings").insert(payload).select("id").maybeSingle();
+      error = res.error;
+      if (!error && res.data) setPcpndtSettingsId(res.data.id);
+    }
+    setPcpndtSaving(false);
+    if (error) {
+      toast({ title: "Save failed", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "PCPNDT compliance settings saved" });
+    }
+  };
 
   const { data: modalities = [], isLoading } = useQuery({
     queryKey: ["settings-radiology-modalities", hospitalId],
@@ -276,6 +327,52 @@ const SettingsRadiologyPage: React.FC = () => {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* PCPNDT Compliance Settings */}
+      <div className="mt-6 border border-border rounded-lg overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 border-b border-border">
+          <Shield size={15} className="text-amber-700" />
+          <h3 className="text-sm font-bold text-amber-900">PCPNDT Act Compliance</h3>
+          <span className="ml-auto text-[11px] text-amber-700 bg-amber-100 px-2 py-0.5 rounded font-medium">Legally Mandatory</span>
+        </div>
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-muted-foreground">
+            These details appear on printed PCPNDT Form F registers and are required under the PC-PNDT Act, 1994.
+          </p>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <Label className="text-xs font-medium">Ultrasound Machine Name / Model</Label>
+              <Input
+                value={pcpndtMachineName}
+                onChange={(e) => setPcpndtMachineName(e.target.value)}
+                placeholder="e.g. GE LOGIQ P9"
+                className="mt-1 h-9"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-medium">Machine Registration Number</Label>
+              <Input
+                value={pcpndtMachineReg}
+                onChange={(e) => setPcpndtMachineReg(e.target.value)}
+                placeholder="State authority registration no."
+                className="mt-1 h-9"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-medium">Doctor PCPNDT Registration Number</Label>
+              <Input
+                value={pcpndtDoctorReg}
+                onChange={(e) => setPcpndtDoctorReg(e.target.value)}
+                placeholder="PCPNDT registration no."
+                className="mt-1 h-9"
+              />
+            </div>
+          </div>
+          <Button size="sm" onClick={savePcpndtSettings} disabled={pcpndtSaving} className="h-8 text-xs">
+            {pcpndtSaving ? "Saving..." : "Save PCPNDT Settings"}
+          </Button>
         </div>
       </div>
 

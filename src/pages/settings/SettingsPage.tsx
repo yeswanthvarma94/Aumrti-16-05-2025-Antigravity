@@ -81,6 +81,7 @@ const settingsGroups: SettingsGroup[] = [
       { icon: Lock, title: "Roles & Permissions", desc: "Define roles, assign module access", route: "/settings/roles" },
       { icon: CalendarDays, title: "Doctor Schedules", desc: "OPD timings, slots, leave blocks", route: "/settings/doctor-schedules" },
       { icon: IndianRupee, title: "Service Rates", desc: "OPD fees, room rates, package pricing", route: "/settings/services" },
+      { icon: CreditCard, title: "Payer Masters", desc: "TPAs, corporates, PMJAY, CGHS, ESI, and scheme accounts", route: "/settings/payer-masters" },
     ],
   },
   {
@@ -122,6 +123,23 @@ const settingsGroups: SettingsGroup[] = [
       { icon: HardDrive, title: "Backup & Export", desc: "Data export, audit logs", route: "/settings/backup" },
       { icon: KeyRound, title: "API Keys", desc: "Developer API access tokens", route: "/settings/api-keys" },
       { icon: Cpu, title: "API Configuration Hub", desc: "AI providers, API keys, developer tools", route: "/settings/api-hub" },
+      { icon: Cpu, title: "AI Features & Attestation", desc: "Enable/disable AI per feature, DPA compliance, doctor attestation policy", route: "/settings/ai-features" },
+    ],
+  },
+  {
+    label: "Inventory & Stores",
+    emoji: "🏭",
+    cards: [
+      { icon: Building2, title: "Store Locations", desc: "Central store, ward sub-stores, OT store, ICU store", route: "/settings/inventory" },
+    ],
+  },
+  {
+    label: "Audit & Compliance",
+    emoji: "🔒",
+    cards: [
+      { icon: ShieldCheck, title: "Record Retention", desc: "Retention policies per record type — NABH IMS compliance", route: "/settings/record-retention" },
+      { icon: ClipboardCheck, title: "Record Access Log", desc: "Who accessed which records — IMS evidence for NABH assessments", route: "/ims/access-logs" },
+      { icon: ListChecks, title: "Config Change Log", desc: "Audit trail of all configuration changes — controlled change management", route: "/settings/change-log" },
     ],
   },
   {

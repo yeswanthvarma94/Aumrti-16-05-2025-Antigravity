@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useHospitalContext } from "@/contexts/HospitalContext";
 import { cn } from "@/lib/utils";
 import { Clock, Save, CheckCircle2, FileText, Printer, MessageSquare, AlertTriangle, Pencil } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -8,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useWhatsAppNotification } from "@/components/whatsapp/WhatsAppNotificationCard";
 import { sendLabResultReady } from "@/lib/whatsapp-notifications";
 import { printDocument, printHeader } from "@/lib/printUtils";
+import { logRecordAccess } from "@/lib/ims";
 import LabTrendPanel from "./LabTrendPanel";
 import LabAnomalyDetector from "./LabAnomalyDetector";
 
@@ -88,12 +90,14 @@ const STATUS_PILLS: Record<string, { bg: string; text: string; label: string }> 
   sample_collected: { bg: "bg-amber-100", text: "text-amber-700", label: "Collected" },
   in_process: { bg: "bg-blue-100", text: "text-blue-700", label: "Processing" },
   result_entered: { bg: "bg-blue-100", text: "text-blue-700", label: "Entered" },
+  pending_validation: { bg: "bg-teal-100", text: "text-teal-700", label: "⏳ Pending Sign-off" },
   validated: { bg: "bg-emerald-100", text: "text-emerald-700", label: "✓ Validated" },
   reported: { bg: "bg-emerald-200", text: "text-emerald-800", label: "✓ Reported" },
 };
 
 const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
   const { toast } = useToast();
+  const { role } = useHospitalContext();
   const { show: showWaNotif, card: waCard } = useWhatsAppNotification();
   const [items, setItems] = useState<TestItem[]>([]);
   const [localValues, setLocalValues] = useState<Record<string, string>>({});
@@ -111,6 +115,13 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
   const [validating, setValidating] = useState(false);
   const [hospitalName, setHospitalName] = useState<string>("");
   const [nablNumber, setNablNumber] = useState<string>("");
+  // Barcode state
+  const [orderBarcode, setOrderBarcode] = useState<string | null>((order as any).barcode || null);
+  // Dual-validation state
+  const [requiresDualValidation, setRequiresDualValidation] = useState(false);
+  const [validationNotes, setValidationNotes] = useState("");
+  // Critical notify gate: item id → confirmed
+  const [doctorNotifyConfirmed, setDoctorNotifyConfirmed] = useState<Record<string, boolean>>({});
 
   // Get current user id and hospital id
   useEffect(() => {
@@ -222,6 +233,20 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
     fetchSamples();
   }, [fetchItems, fetchSamples]);
 
+  // Check dual-validation config once items + hospitalId are loaded
+  useEffect(() => {
+    if (!labHospitalId || items.length === 0) return;
+    const categories = [...new Set(items.map(i => i.category).filter(Boolean))];
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("lab_dual_validation_config")
+        .select("requires_dual_validation")
+        .eq("hospital_id", labHospitalId)
+        .in("test_category", categories);
+      setRequiresDualValidation(data?.some((c: any) => c.requires_dual_validation) ?? false);
+    })();
+  }, [labHospitalId, items]);
+
   // TAT calculation — freeze at validated_at when the order is completed
   const isCompleted = order.status === "completed";
   const completedAt = isCompleted
@@ -325,13 +350,21 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
 
   const handleMarkCollected = async () => {
     if (!currentUserId) return;
+    const p = order.patients;
+    const newBarcode = `LAB-${(p?.uhid || "NOID").replace(/\s/g, "")}-${order.id.slice(0, 8).toUpperCase()}`;
+
     await supabase.from("lab_order_items").update({
       status: "sample_collected",
       sample_collected_at: new Date().toISOString(),
       sample_collected_by: currentUserId,
     }).eq("lab_order_id", order.id).in("status", ["ordered"]);
 
-    await supabase.from("lab_orders").update({ status: "sample_collected" }).eq("id", order.id);
+    await supabase.from("lab_orders").update({
+      status: "sample_collected",
+      barcode: newBarcode,
+      sample_collected_at: new Date().toISOString(),
+    } as any).eq("id", order.id);
+    setOrderBarcode(newBarcode);
     await supabase.from("lab_samples").update({
       status: "collected",
       collected_at: new Date().toISOString(),
@@ -366,6 +399,86 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
     await supabase.from("lab_orders").update({ status: "in_process" }).eq("id", order.id);
     fetchItems(); fetchSamples(); onRefresh();
     toast({ title: "🔬 Sample processing started" });
+  };
+
+  const handleSubmitForValidation = async () => {
+    if (!currentUserId || validating) return;
+    setValidating(true);
+    const unacknowledged = items.filter(i => (i.result_flag === "CH" || i.result_flag === "CL") && !i.critical_acknowledged);
+    if (unacknowledged.length > 0) {
+      toast({ title: "Acknowledge all critical values before submitting", variant: "destructive" });
+      setValidating(false);
+      return;
+    }
+    await supabase.from("lab_orders").update({ status: "pending_validation" } as any).eq("id", order.id);
+    setValidating(false);
+    onRefresh();
+    toast({ title: "⏳ Submitted for pathologist sign-off" });
+  };
+
+  const handlePathologistValidate = async () => {
+    if (!currentUserId || validating) return;
+    setValidating(true);
+    const now = new Date().toISOString();
+    await supabase.from("lab_order_items").update({
+      status: "reported",
+      validated_at: now,
+      validated_by: currentUserId,
+    }).eq("lab_order_id", order.id).neq("status", "cancelled");
+
+    await supabase.from("lab_orders").update({
+      status: "completed",
+      validated_by: currentUserId,
+      validated_at: now,
+      validation_notes: validationNotes || null,
+    } as any).eq("id", order.id);
+
+    setValidating(false);
+    fetchItems();
+    onRefresh();
+    toast({ title: "✓ Report validated & signed by pathologist" });
+  };
+
+  const printBarcodeLabel = async () => {
+    if (!orderBarcode) return;
+    const p = order.patients;
+    const testNames = items.map(i => i.test_name).join(", ");
+    const dateStr = new Date().toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const html = `<!DOCTYPE html>
+<html><head><title>Barcode Label</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:Arial,sans-serif;width:50mm}
+  .label{width:50mm;min-height:25mm;padding:2mm;display:flex;flex-direction:column;align-items:center;border:.5px solid #000}
+  svg{width:46mm;height:14mm}
+  p{font-size:7px;text-align:center;line-height:1.3}
+  .name{font-size:9px;font-weight:bold}
+  @media print{@page{size:50mm 25mm;margin:0}body{width:50mm}}
+</style></head>
+<body>
+<div class="label">
+  <svg id="bc"></svg>
+  <p class="name">${p?.full_name || "Patient"}</p>
+  <p>${p?.uhid || ""} | ${dateStr}</p>
+  <p style="max-width:46mm;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${testNames}</p>
+</div>
+<script>
+  JsBarcode("#bc","${orderBarcode}",{format:"CODE128",width:1.5,height:40,displayValue:true,fontSize:8,margin:2});
+  setTimeout(()=>{window.print();window.close();},400);
+<\/script>
+</body></html>`;
+    const win = window.open("", "_blank", "width=320,height=270,toolbar=0,menubar=0");
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+      if (currentUserId) {
+        await supabase.from("lab_orders").update({
+          barcode_printed_at: new Date().toISOString(),
+          barcode_printed_by: currentUserId,
+        } as any).eq("id", order.id);
+      }
+    }
   };
 
   const handleValidateAll = async () => {
@@ -565,7 +678,24 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
             📦 Mark Collected
           </button>
         )}
-        {allResultsEntered && order.status !== "completed" && (
+        {/* Dual-validation: technician submits for sign-off */}
+        {allResultsEntered && requiresDualValidation && role !== "doctor" && role !== "pathologist" && role !== "radiologist" && order.status !== "completed" && order.status !== "pending_validation" && (
+          <button onClick={handleSubmitForValidation}
+            disabled={hasUnacknowledgedCritical || validating}
+            className="shrink-0 px-3.5 py-1.5 rounded-lg bg-teal-600 text-white text-[11px] font-semibold hover:bg-teal-700 active:scale-[0.97] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+            {validating ? "⏳ Submitting..." : "⏳ Submit for Validation"}
+          </button>
+        )}
+        {/* Dual-validation: pathologist/doctor sees Validate & Sign */}
+        {requiresDualValidation && (role === "doctor" || role === "pathologist" || role === "radiologist") && order.status === "pending_validation" && (
+          <button onClick={handlePathologistValidate}
+            disabled={validating}
+            className="shrink-0 px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 active:scale-[0.97] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+            {validating ? "⏳ Signing..." : "✓ Validate & Sign"}
+          </button>
+        )}
+        {/* Standard single-step validation */}
+        {allResultsEntered && !requiresDualValidation && order.status !== "completed" && order.status !== "pending_validation" && (
           <button onClick={handleValidateAll}
             disabled={hasUnacknowledgedCritical || validating}
             className="shrink-0 px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 active:scale-[0.97] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
@@ -696,19 +826,43 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
 
                       {/* Critical banner */}
                       {isCritical && !item.critical_acknowledged && (
-                        <div className="mx-4 my-1 bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-center gap-3">
-                          <AlertTriangle className="text-destructive shrink-0" size={18} />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[13px] font-bold text-destructive uppercase">Critical Value Detected</p>
-                            <p className="text-sm font-semibold text-foreground">{item.test_name}: {item.result_value} {item.unit || ""}</p>
-                            <p className="text-[11px] text-muted-foreground">Normal: {item.normal_min}–{item.normal_max}</p>
+                        <div className="mx-4 my-1 bg-red-50 border-2 border-red-300 rounded-lg px-4 py-3">
+                          <div className="flex items-start gap-3">
+                            <AlertTriangle className="text-destructive shrink-0 mt-0.5" size={18} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[13px] font-bold text-destructive uppercase tracking-wide">
+                                🚨 Critical Value — Notify Treating Doctor Immediately
+                              </p>
+                              <p className="text-sm font-semibold text-foreground mt-0.5">
+                                {item.test_name}: <span className="text-destructive">{item.result_value} {item.unit || ""}</span>
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                Normal range: {item.normal_min != null && item.normal_max != null ? `${item.normal_min} – ${item.normal_max}` : "—"}
+                                {item.critical_low != null ? ` | Critical low: ${item.critical_low}` : ""}
+                                {item.critical_high != null ? ` | Critical high: ${item.critical_high}` : ""}
+                              </p>
+                              <label className="flex items-center gap-2 mt-2.5 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-gray-400 accent-red-600"
+                                  checked={doctorNotifyConfirmed[item.id] || false}
+                                  onChange={e => setDoctorNotifyConfirmed(prev => ({ ...prev, [item.id]: e.target.checked }))}
+                                />
+                                <span className="text-xs font-semibold text-foreground">
+                                  I have notified the treating doctor about this critical value
+                                </span>
+                              </label>
+                            </div>
                           </div>
-                          <button
-                            onClick={() => handleAcknowledgeCritical(item.id)}
-                            className="shrink-0 px-3 py-1.5 rounded-md bg-destructive text-white text-xs font-semibold hover:bg-destructive/90 active:scale-[0.97] transition-all"
-                          >
-                            ✓ Acknowledge
-                          </button>
+                          <div className="flex justify-end mt-2">
+                            <button
+                              onClick={() => handleAcknowledgeCritical(item.id)}
+                              disabled={!doctorNotifyConfirmed[item.id]}
+                              className="px-3 py-1.5 rounded-md bg-destructive text-white text-xs font-semibold hover:bg-destructive/90 active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              ✓ Acknowledge & Continue
+                            </button>
+                          </div>
                         </div>
                       )}
                       {isCritical && item.critical_acknowledged && (
@@ -833,10 +987,18 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
             return (
               <div key={sample.id} className="bg-card border border-border rounded-lg p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs font-semibold bg-muted px-2 py-1 rounded capitalize">{sample.sample_type}</span>
-                    {sample.barcode && (
-                      <span className="text-xs font-mono bg-muted/50 px-2 py-1 rounded text-muted-foreground">{sample.barcode}</span>
+                    {orderBarcode && (
+                      <span className="text-xs font-mono bg-muted/50 px-2 py-1 rounded text-muted-foreground">{orderBarcode}</span>
+                    )}
+                    {orderBarcode && (
+                      <button
+                        onClick={printBarcodeLabel}
+                        className="text-[11px] font-medium px-2.5 py-1 rounded border border-border text-foreground hover:bg-muted transition-colors flex items-center gap-1"
+                      >
+                        🏷️ Print Barcode Label
+                      </button>
                     )}
                   </div>
                   <span className={cn("text-[10px] font-medium px-2 py-0.5 rounded-full capitalize",
@@ -967,9 +1129,8 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
       </Tabs>
 
       {/* Action Bar */}
-      <div className="h-14 shrink-0 bg-card border-t border-border px-5 flex items-center gap-2">
+      <div className="shrink-0 bg-card border-t border-border px-5 py-2 flex items-center gap-2 flex-wrap min-h-[56px]">
         <button onClick={() => {
-          // Save all currently entered but unsaved results
           const unsaved = items.filter(i => localValues[i.id] && localValues[i.id] !== i.result_value);
           if (unsaved.length === 0) { toast({ title: "All results already saved" }); return; }
           Promise.all(unsaved.map(i => saveResult(i, localValues[i.id]))).then(() => {
@@ -979,11 +1140,39 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
           className="px-4 py-2 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-1.5">
           <Save size={14} /> Save All
         </button>
-        <button onClick={handleValidateAll}
-          disabled={!allResultsEntered || hasUnacknowledgedCritical || validating}
-          className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
-          <CheckCircle2 size={14} /> {validating ? "Validating..." : "Validate & Release"}
-        </button>
+        {/* Single-step validation */}
+        {!requiresDualValidation && (
+          <button onClick={handleValidateAll}
+            disabled={!allResultsEntered || hasUnacknowledgedCritical || validating}
+            className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+            <CheckCircle2 size={14} /> {validating ? "Validating..." : "Validate & Release"}
+          </button>
+        )}
+        {/* Technician: submit for pathologist */}
+        {requiresDualValidation && role !== "doctor" && role !== "pathologist" && role !== "radiologist" && order.status !== "pending_validation" && order.status !== "completed" && (
+          <button onClick={handleSubmitForValidation}
+            disabled={!allResultsEntered || hasUnacknowledgedCritical || validating}
+            className="px-4 py-2 rounded-lg bg-teal-600 text-white text-xs font-semibold hover:bg-teal-700 active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+            <CheckCircle2 size={14} /> {validating ? "Submitting..." : "Submit for Validation"}
+          </button>
+        )}
+        {/* Pathologist: add notes + sign */}
+        {requiresDualValidation && (role === "doctor" || role === "pathologist" || role === "radiologist") && order.status === "pending_validation" && (
+          <>
+            <input
+              type="text"
+              value={validationNotes}
+              onChange={e => setValidationNotes(e.target.value)}
+              placeholder="Pathologist notes (optional)..."
+              className="flex-1 h-9 border border-border rounded-lg px-3 text-xs bg-background focus:ring-2 focus:ring-ring focus:border-transparent outline-none min-w-[180px]"
+            />
+            <button onClick={handlePathologistValidate}
+              disabled={validating}
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+              <CheckCircle2 size={14} /> {validating ? "Signing..." : "Validate & Sign"}
+            </button>
+          </>
+        )}
         <div className="flex-1" />
         <button onClick={() => {
           const p = order.patients;
@@ -1052,6 +1241,7 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
             </div>
           `;
 
+          logRecordAccess({ hospitalId: labHospitalId, recordType: "Lab_Report", recordId: order.id, patientId: order.patient_id, action: "print" });
           printDocument(`Lab Report – ${p?.full_name || "Patient"}`, body);
         }}
           className="px-3 py-2 rounded-lg border border-border text-xs font-medium text-foreground hover:bg-muted transition-colors flex items-center gap-1.5">

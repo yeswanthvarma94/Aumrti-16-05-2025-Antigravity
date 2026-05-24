@@ -362,9 +362,17 @@ const DayTimeline: React.FC<{
                 {s.status === "in_progress" && <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1 animate-pulse" />}
                 {STATUS_LABELS[s.status]}
               </span>
-              {selectedRoomId === "all" && s.ot_room && (
-                <span className="text-[8px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">{s.ot_room.name}</span>
-              )}
+              <div className="flex items-center gap-1">
+                {s.admission?.is_mlc && (
+                  <span className="text-[8px] bg-red-600 text-white px-1.5 py-0.5 rounded-full font-bold">MLC</span>
+                )}
+                {s.status === "scheduled" && !s.pac_cleared && (
+                  <span className="text-[8px] bg-amber-500 text-white px-1.5 py-0.5 rounded-full font-bold">PAC⚠</span>
+                )}
+                {selectedRoomId === "all" && s.ot_room && (
+                  <span className="text-[8px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">{s.ot_room.name}</span>
+                )}
+              </div>
             </div>
           </div>
         </div>
