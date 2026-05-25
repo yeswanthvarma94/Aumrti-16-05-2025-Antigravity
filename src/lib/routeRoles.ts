@@ -43,7 +43,12 @@ ROUTE_ROLES['/fms/dashboard'] = [
   'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
 ];
 ROUTE_ROLES['/settings/record-retention'] = ['super_admin', 'hospital_admin'];
-ROUTE_ROLES['/settings/change-log'] = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/settings/change-log']  = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/settings/tv-display']    = ['super_admin', 'hospital_admin', 'receptionist'];
+ROUTE_ROLES['/settings/ai-languages']  = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/settings/integrations']  = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/settings/product-mode']  = ['super_admin', 'hospital_admin'];
+ROUTE_ROLES['/analytics/forecasts']    = ['super_admin', 'hospital_admin', 'cfo', 'doctor'];
 ROUTE_ROLES['/admin/go-live'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/design-system'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/admin/data-migration'] = ['super_admin', 'hospital_admin'];

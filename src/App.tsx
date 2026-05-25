@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -13,6 +13,8 @@ import RoleGuard from "@/components/auth/RoleGuard";
 import ModuleErrorBoundary from "@/components/auth/ModuleErrorBoundary";
 import { ROUTE_ROLES } from "@/lib/routeRoles";
 import { HospitalProvider } from "@/contexts/HospitalContext";
+import { useProductMode } from "@/contexts/ProductModeContext";
+import { Lock } from "lucide-react";
 
 const Register = lazy(() => import("./pages/register"));
 const OnboardingWizard = lazy(() => import("./pages/setup/OnboardingWizard"));
@@ -77,7 +79,11 @@ const InboxPage = lazy(() => import("./pages/inbox/InboxPage"));
 const TelemedicinePage = lazy(() => import("./pages/telemedicine/TelemedicinePage"));
 const HODDashboardPage = lazy(() => import("./pages/hod/HODDashboardPage"));
 const CEOBoardPage = lazy(() => import("./pages/hod/CEOBoardPage"));
-const TVDisplayPage = lazy(() => import("./pages/tv/TVDisplayPage"));
+const TVDisplayPage          = lazy(() => import("./pages/tv/TVDisplayPage"));
+const AdvancedQueueDisplayPage = lazy(() => import("./pages/tv/AdvancedQueueDisplayPage"));
+const KioskLandingPage       = lazy(() => import("./pages/kiosk/KioskLandingPage"));
+const KioskCheckinPage       = lazy(() => import("./pages/kiosk/KioskCheckinPage"));
+const SettingsTVDisplayPage  = lazy(() => import("./pages/settings/SettingsTVDisplayPage"));
 const DesignSystem = lazy(() => import("./pages/DesignSystem"));
 const PatientPortal = lazy(() => import("./pages/portal/PatientPortal"));
 const GoLiveChecklistPage = lazy(() => import("./pages/admin/GoLiveChecklistPage"));
@@ -127,8 +133,13 @@ const ProcurementRecommendationsPage = lazy(() => import("./pages/inventory/Proc
 const PublicBookingPage = lazy(() => import("./pages/packages/PublicBookingPage"));
 const SettingsHMISPage = lazy(() => import("./pages/settings/SettingsHMISPage"));
 const SettingsAIFeaturesPage = lazy(() => import("./pages/settings/SettingsAIFeaturesPage"));
+const SettingsAILanguagePage = lazy(() => import("./pages/settings/SettingsAILanguagePage"));
 const SettingsInventoryPage = lazy(() => import("./pages/settings/SettingsInventoryPage"));
-const PatientJoinPage = lazy(() => import("./pages/teleconsult/PatientJoinPage"));
+const IntegrationsHubPage = lazy(() => import("./pages/settings/IntegrationsHubPage"));
+const SettingsProductModePage = lazy(() => import("./pages/settings/SettingsProductModePage"));
+const ForecastsPage = lazy(() => import("./pages/analytics/ForecastsPage"));
+const PatientJoinPage        = lazy(() => import("./pages/teleconsult/PatientJoinPage"));
+const DoctorTeleconsultPage  = lazy(() => import("./pages/teleconsult/DoctorTeleconsultPage"));
 const NABHMatrixPage = lazy(() => import("./pages/nabh/NABHMatrixPage"));
 const SafetyEventsPage = lazy(() => import("./pages/quality/SafetyEventsPage"));
 const IPCDashboardPage = lazy(() => import("./pages/ipc/IPCDashboardPage"));
@@ -176,6 +187,23 @@ const SM = ({ name, children }: { name: string; children: React.ReactNode }) => 
   );
 };
 
+/** Gates a route behind product-mode module enablement. */
+const MG = ({ moduleKey, children }: { moduleKey: string; children: ReactNode }) => {
+  const { isModuleEnabled, loadingMode } = useProductMode();
+  if (loadingMode) return null;
+  if (!isModuleEnabled(moduleKey)) return (
+    <div className="h-[calc(100vh-56px)] flex flex-col items-center justify-center gap-4 text-center px-8">
+      <Lock size={40} className="text-muted-foreground/30" />
+      <p className="text-xl font-bold text-foreground">Module Not Enabled</p>
+      <p className="text-sm text-muted-foreground max-w-xs leading-relaxed">
+        This module is disabled for your deployment. Contact your admin to enable it in{" "}
+        <strong>Settings → Product Mode</strong>.
+      </p>
+    </div>
+  );
+  return <>{children}</>;
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <HospitalProvider>
@@ -194,6 +222,11 @@ const App = () => (
           <Route path="/register" element={<SuspenseWrap><Register /></SuspenseWrap>} />
           <Route path="/setup/onboarding" element={<AuthGuard><SuspenseWrap><OnboardingWizard /></SuspenseWrap></AuthGuard>} />
           <Route path="/tv-display" element={<SuspenseWrap><TVDisplayPage /></SuspenseWrap>} />
+          <Route path="/tv"         element={<SuspenseWrap><AdvancedQueueDisplayPage /></SuspenseWrap>} />
+          <Route path="/kiosk"           element={<SuspenseWrap><KioskLandingPage /></SuspenseWrap>} />
+          <Route path="/kiosk/checkin"  element={<SuspenseWrap><KioskCheckinPage /></SuspenseWrap>} />
+          <Route path="/kiosk/register" element={<SuspenseWrap><KioskCheckinPage /></SuspenseWrap>} />
+          <Route path="/kiosk/pay"      element={<SuspenseWrap><KioskCheckinPage /></SuspenseWrap>} />
           <Route path="/ward-board" element={<SuspenseWrap><WardNursingBoard /></SuspenseWrap>} />
           <Route path="/hod-dashboard" element={<AuthGuard><SuspenseWrap><HODDashboardPage /></SuspenseWrap></AuthGuard>} />
           <Route path="/ceo-board" element={<AuthGuard><SuspenseWrap><CEOBoardPage /></SuspenseWrap></AuthGuard>} />
@@ -202,38 +235,40 @@ const App = () => (
           <Route element={<AuthGuard><AppShell /></AuthGuard>}>
             <Route path="/dashboard" element={<RG path="/dashboard"><SM name="Dashboard"><Dashboard /></SM></RG>} />
             <Route path="/modules" element={<RG path="/modules"><SM name="Modules"><ModulesPage /></SM></RG>} />
-            <Route path="/patients" element={<RG path="/patients"><SM name="Patients"><PatientsPage /></SM></RG>} />
-            <Route path="/patients/:id/summary" element={<RG path="/patients"><SM name="Patient 360° View"><PatientSummaryPage /></SM></RG>} />
-            <Route path="/opd" element={<RG path="/opd"><SM name="OPD"><OPDPage /></SM></RG>} />
+            <Route path="/patients" element={<RG path="/patients"><MG moduleKey="patients"><SM name="Patients"><PatientsPage /></SM></MG></RG>} />
+            <Route path="/patients/:id/summary" element={<RG path="/patients"><MG moduleKey="patients"><SM name="Patient 360° View"><PatientSummaryPage /></SM></MG></RG>} />
+            <Route path="/opd" element={<RG path="/opd"><MG moduleKey="opd"><SM name="OPD"><OPDPage /></SM></MG></RG>} />
             <Route path="/schedule" element={<RG path="/schedule"><SM name="Scheduling"><SchedulingPage /></SM></RG>} />
-            <Route path="/ipd" element={<RG path="/ipd"><SM name="IPD"><IPDPage /></SM></RG>} />
-            <Route path="/ipd/day-care" element={<RG path="/ipd/day-care"><SM name="Day Care Unit"><DayCarePage /></SM></RG>} />
-            <Route path="/emergency" element={<RG path="/emergency"><SM name="Emergency"><EmergencyPage /></SM></RG>} />
+            <Route path="/ipd" element={<RG path="/ipd"><MG moduleKey="ipd"><SM name="IPD"><IPDPage /></SM></MG></RG>} />
+            <Route path="/ipd/day-care" element={<RG path="/ipd/day-care"><MG moduleKey="ipd"><SM name="Day Care Unit"><DayCarePage /></SM></MG></RG>} />
+            <Route path="/emergency" element={<RG path="/emergency"><MG moduleKey="emergency"><SM name="Emergency"><EmergencyPage /></SM></MG></RG>} />
             <Route path="/ambulance" element={<RG path="/ambulance"><SM name="Ambulance Service"><AmbulancePage /></SM></RG>} />
             <Route path="/home-care" element={<RG path="/home-care"><SM name="Home Care"><HomeCarePage /></SM></RG>} />
-            <Route path="/ot" element={<RG path="/ot"><SM name="Operation Theatre"><OTPage /></SM></RG>} />
-            <Route path="/nursing" element={<RG path="/nursing"><SM name="Nursing"><NursingPage /></SM></RG>} />
-            <Route path="/lab" element={<RG path="/lab"><SM name="Laboratory"><LabPage /></SM></RG>} />
-            <Route path="/radiology" element={<RG path="/radiology"><SM name="Radiology"><RadiologyPage /></SM></RG>} />
-            <Route path="/radiology/pcpndt-register" element={<RG path="/radiology"><SM name="PCPNDT Register"><PCPNDTRegisterPage /></SM></RG>} />
-            <Route path="/pharmacy" element={<RG path="/pharmacy"><SM name="Pharmacy"><PharmacyPage /></SM></RG>} />
-            <Route path="/billing" element={<RG path="/billing"><SM name="Billing"><BillingPage /></SM></RG>} />
-            <Route path="/billing/closure" element={<RG path="/billing/closure"><SM name="Day Closure"><DailyCashClosurePage /></SM></RG>} />
-            <Route path="/insurance" element={<RG path="/insurance"><SM name="Insurance"><InsurancePage /></SM></RG>} />
+            <Route path="/ot" element={<RG path="/ot"><MG moduleKey="ot"><SM name="Operation Theatre"><OTPage /></SM></MG></RG>} />
+            <Route path="/nursing" element={<RG path="/nursing"><MG moduleKey="nursing"><SM name="Nursing"><NursingPage /></SM></MG></RG>} />
+            <Route path="/lab" element={<RG path="/lab"><MG moduleKey="lab"><SM name="Laboratory"><LabPage /></SM></MG></RG>} />
+            <Route path="/radiology" element={<RG path="/radiology"><MG moduleKey="radiology"><SM name="Radiology"><RadiologyPage /></SM></MG></RG>} />
+            <Route path="/radiology/pcpndt-register" element={<RG path="/radiology"><MG moduleKey="radiology"><SM name="PCPNDT Register"><PCPNDTRegisterPage /></SM></MG></RG>} />
+            <Route path="/pharmacy" element={<RG path="/pharmacy"><MG moduleKey="pharmacy"><SM name="Pharmacy"><PharmacyPage /></SM></MG></RG>} />
+            <Route path="/billing" element={<RG path="/billing"><MG moduleKey="billing"><SM name="Billing"><BillingPage /></SM></MG></RG>} />
+            <Route path="/billing/closure" element={<RG path="/billing/closure"><MG moduleKey="billing"><SM name="Day Closure"><DailyCashClosurePage /></SM></MG></RG>} />
+            <Route path="/insurance" element={<RG path="/insurance"><MG moduleKey="insurance"><SM name="Insurance"><InsurancePage /></SM></MG></RG>} />
             <Route path="/payments" element={<RG path="/payments"><SM name="Payments"><PaymentsPage /></SM></RG>} />
-            <Route path="/hr" element={<RG path="/hr"><SM name="HR & Payroll"><HRPage /></SM></RG>} />
-            <Route path="/inventory" element={<RG path="/inventory"><SM name="Inventory"><InventoryPage /></SM></RG>} />
-            <Route path="/quality" element={<RG path="/quality"><SM name="Quality"><QualityPage /></SM></RG>} />
-            <Route path="/nabh/compliance" element={<RG path="/nabh/compliance"><SM name="NABH Compliance Matrix"><NABHMatrixPage /></SM></RG>} />
-            <Route path="/quality/events" element={<RG path="/quality/events"><SM name="Safety Events"><SafetyEventsPage /></SM></RG>} />
-            <Route path="/ipc/dashboard" element={<RG path="/ipc/dashboard"><SM name="IPC Surveillance"><IPCDashboardPage /></SM></RG>} />
-            <Route path="/quality/clinical-audits" element={<RG path="/quality/clinical-audits"><SM name="Clinical Audits"><ClinicalAuditPage /></SM></RG>} />
-            <Route path="/quality/qi-projects" element={<RG path="/quality/qi-projects"><SM name="QI Projects"><QIProjectsPage /></SM></RG>} />
-            <Route path="/quality/committees" element={<RG path="/quality/committees"><SM name="Committees"><CommitteesPage /></SM></RG>} />
-            <Route path="/fms/dashboard" element={<RG path="/fms/dashboard"><SM name="Facility Management"><FMSDashboardPage /></SM></RG>} />
-            <Route path="/analytics" element={<RG path="/analytics"><SM name="Analytics"><AnalyticsPage /></SM></RG>} />
+            <Route path="/hr" element={<RG path="/hr"><MG moduleKey="hr"><SM name="HR & Payroll"><HRPage /></SM></MG></RG>} />
+            <Route path="/inventory" element={<RG path="/inventory"><MG moduleKey="inventory"><SM name="Inventory"><InventoryPage /></SM></MG></RG>} />
+            <Route path="/quality" element={<RG path="/quality"><MG moduleKey="quality"><SM name="Quality"><QualityPage /></SM></MG></RG>} />
+            <Route path="/nabh/compliance" element={<RG path="/nabh/compliance"><MG moduleKey="quality"><SM name="NABH Compliance Matrix"><NABHMatrixPage /></SM></MG></RG>} />
+            <Route path="/quality/events" element={<RG path="/quality/events"><MG moduleKey="quality"><SM name="Safety Events"><SafetyEventsPage /></SM></MG></RG>} />
+            <Route path="/ipc/dashboard" element={<RG path="/ipc/dashboard"><MG moduleKey="ipc"><SM name="IPC Surveillance"><IPCDashboardPage /></SM></MG></RG>} />
+            <Route path="/quality/clinical-audits" element={<RG path="/quality/clinical-audits"><MG moduleKey="quality"><SM name="Clinical Audits"><ClinicalAuditPage /></SM></MG></RG>} />
+            <Route path="/quality/qi-projects" element={<RG path="/quality/qi-projects"><MG moduleKey="quality"><SM name="QI Projects"><QIProjectsPage /></SM></MG></RG>} />
+            <Route path="/quality/committees" element={<RG path="/quality/committees"><MG moduleKey="quality"><SM name="Committees"><CommitteesPage /></SM></MG></RG>} />
+            <Route path="/fms/dashboard" element={<RG path="/fms/dashboard"><MG moduleKey="fms"><SM name="Facility Management"><FMSDashboardPage /></SM></MG></RG>} />
+            <Route path="/analytics" element={<RG path="/analytics"><MG moduleKey="analytics"><SM name="Analytics"><AnalyticsPage /></SM></MG></RG>} />
+            <Route path="/analytics/forecasts" element={<RG path="/analytics"><MG moduleKey="analytics"><SM name="Predictive Analytics"><ForecastsPage /></SM></MG></RG>} />
             <Route path="/executive-dashboard" element={<RG path="/analytics"><SM name="Executive Dashboard"><ExecutiveDashboardPage /></SM></RG>} />
-            <Route path="/telemedicine" element={<RG path="/telemedicine"><SM name="Telemedicine"><TelemedicinePage /></SM></RG>} />
+            <Route path="/telemedicine" element={<RG path="/telemedicine"><MG moduleKey="telemedicine"><SM name="Telemedicine"><TelemedicinePage /></SM></MG></RG>} />
+            <Route path="/teleconsult/doctor" element={<RG path="/telemedicine"><MG moduleKey="telemedicine"><SM name="Teleconsult"><DoctorTeleconsultPage /></SM></MG></RG>} />
             <Route path="/inbox" element={<RG path="/inbox"><SM name="Inbox"><InboxPage /></SM></RG>} />
             <Route path="/settings" element={<RG path="/settings"><SM name="Settings"><SettingsPage /></SM></RG>} />
             <Route path="/settings/bank-accounts" element={<RG path="/settings"><SM name="Bank Accounts"><SettingsBankAccountsPage /></SM></RG>} />
@@ -265,6 +300,7 @@ const App = () => (
             <Route path="/settings/razorpay" element={<RG path="/settings"><SM name="Razorpay"><SettingsRazorpayPage /></SM></RG>} />
             <Route path="/settings/hmis-portal" element={<RG path="/settings"><SM name="HMIS Portal"><SettingsHMISPage /></SM></RG>} />
             <Route path="/settings/ai-features" element={<RG path="/settings"><SM name="AI Features"><SettingsAIFeaturesPage /></SM></RG>} />
+            <Route path="/settings/ai-languages" element={<RG path="/settings"><SM name="AI Language Packs"><SettingsAILanguagePage /></SM></RG>} />
             <Route path="/settings/inventory" element={<RG path="/settings"><SM name="Inventory Settings"><SettingsInventoryPage /></SM></RG>} />
             <Route path="/settings/gst" element={<RG path="/settings"><SM name="GST"><SettingsGSTPage /></SM></RG>} />
             <Route path="/settings/abdm" element={<RG path="/settings"><SM name="ABDM"><SettingsABDMPage /></SM></RG>} />
@@ -272,30 +308,33 @@ const App = () => (
             <Route path="/settings/record-retention" element={<RG path="/settings"><SM name="Record Retention"><SettingsRecordRetentionPage /></SM></RG>} />
             <Route path="/ims/access-logs" element={<RG path="/settings"><SM name="IMS Access Logs"><IMSAccessLogsPage /></SM></RG>} />
             <Route path="/settings/change-log" element={<RG path="/settings/change-log"><SM name="Config Change Log"><ConfigChangeLogPage /></SM></RG>} />
+            <Route path="/settings/tv-display" element={<RG path="/settings"><SM name="TV Display & Kiosk"><SettingsTVDisplayPage /></SM></RG>} />
             <Route path="/settings/api-keys" element={<RG path="/settings"><SM name="API Keys"><SettingsAPIKeysPage /></SM></RG>} />
             <Route path="/settings/api-hub" element={<RG path="/settings"><SM name="API Hub"><APIConfigHubPage /></SM></RG>} />
+            <Route path="/settings/integrations" element={<RG path="/settings/integrations"><SM name="Integrations Console"><IntegrationsHubPage /></SM></RG>} />
+            <Route path="/settings/product-mode" element={<RG path="/settings/product-mode"><SM name="Product Mode"><SettingsProductModePage /></SM></RG>} />
             <Route path="/settings/icd-codes" element={<RG path="/settings"><SM name="ICD Codes"><SettingsICDCodesPage /></SM></RG>} />
             <Route path="/settings/radiology" element={<RG path="/settings"><SM name="Radiology Settings"><SettingsRadiologyPage /></SM></RG>} />
             <Route path="/settings/day-care-procedures" element={<RG path="/settings"><SM name="Day Care Procedures"><SettingsDayCareProceduresPage /></SM></RG>} />
             <Route path="/settings/templates" element={<RG path="/settings"><SM name="EMR Templates"><SpecialtyTemplateBuilderPage /></SM></RG>} />
-            <Route path="/accounts" element={<RG path="/accounts"><SM name="Accounts"><AccountsPage /></SM></RG>} />
-            <Route path="/accounts/setup" element={<RG path="/accounts"><SM name="Opening Balances"><OpeningBalancesPage /></SM></RG>} />
-            <Route path="/accounts/chart-of-accounts" element={<RG path="/accounts"><SM name="Chart of Accounts"><ChartOfAccountsPage /></SM></RG>} />
-            <Route path="/accounts/journal-workbench" element={<RG path="/accounts"><SM name="Journal Workbench"><JournalWorkbenchPage /></SM></RG>} />
-            <Route path="/accounts/cost-centres" element={<RG path="/accounts"><SM name="Cost Centres"><CostCentresPage /></SM></RG>} />
+            <Route path="/accounts" element={<RG path="/accounts"><MG moduleKey="accounts"><SM name="Accounts"><AccountsPage /></SM></MG></RG>} />
+            <Route path="/accounts/setup" element={<RG path="/accounts"><MG moduleKey="accounts"><SM name="Opening Balances"><OpeningBalancesPage /></SM></MG></RG>} />
+            <Route path="/accounts/chart-of-accounts" element={<RG path="/accounts"><MG moduleKey="accounts"><SM name="Chart of Accounts"><ChartOfAccountsPage /></SM></MG></RG>} />
+            <Route path="/accounts/journal-workbench" element={<RG path="/accounts"><MG moduleKey="accounts"><SM name="Journal Workbench"><JournalWorkbenchPage /></SM></MG></RG>} />
+            <Route path="/accounts/cost-centres" element={<RG path="/accounts"><MG moduleKey="accounts"><SM name="Cost Centres"><CostCentresPage /></SM></MG></RG>} />
             <Route path="/blood-bank" element={<RG path="/blood-bank"><SM name="Blood Bank"><BloodBankPage /></SM></RG>} />
             <Route path="/cssd" element={<RG path="/cssd"><SM name="CSSD"><CSSDPage /></SM></RG>} />
             <Route path="/dialysis" element={<RG path="/dialysis"><SM name="Dialysis"><DialysisPage /></SM></RG>} />
             <Route path="/oncology" element={<RG path="/oncology"><SM name="Oncology"><OncologyPage /></SM></RG>} />
-            <Route path="/mrd" element={<RG path="/mrd"><SM name="Medical Records"><MRDPage /></SM></RG>} />
+            <Route path="/mrd" element={<RG path="/mrd"><MG moduleKey="mrd"><SM name="Medical Records"><MRDPage /></SM></MG></RG>} />
             <Route path="/pmjay" element={<RG path="/pmjay"><SM name="PMJAY"><PmjayPage /></SM></RG>} />
             <Route path="/biomedical" element={<RG path="/biomedical"><SM name="Biomedical"><BiomedicalPage /></SM></RG>} />
-            <Route path="/assets" element={<RG path="/assets"><SM name="Assets"><AssetsPage /></SM></RG>} />
+            <Route path="/assets" element={<RG path="/assets"><MG moduleKey="assets"><SM name="Assets"><AssetsPage /></SM></MG></RG>} />
             <Route path="/housekeeping" element={<RG path="/housekeeping"><SM name="Housekeeping"><HousekeepingPage /></SM></RG>} />
             <Route path="/hmis" element={<RG path="/hmis"><SM name="HMIS"><HMISPage /></SM></RG>} />
             <Route path="/dietetics" element={<RG path="/dietetics"><SM name="Dietetics"><DietPage /></SM></RG>} />
-            <Route path="/lms" element={<RG path="/lms"><SM name="LMS"><LMSPage /></SM></RG>} />
-            <Route path="/crm" element={<RG path="/crm"><SM name="CRM"><CRMPage /></SM></RG>} />
+            <Route path="/lms" element={<RG path="/lms"><MG moduleKey="lms"><SM name="LMS"><LMSPage /></SM></MG></RG>} />
+            <Route path="/crm" element={<RG path="/crm"><MG moduleKey="crm"><SM name="CRM"><CRMPage /></SM></MG></RG>} />
             <Route path="/pro" element={<RG path="/pro"><SM name="PRO"><PROPage /></SM></RG>} />
             <Route path="/physio" element={<RG path="/physio"><SM name="Physiotherapy"><PhysioPage /></SM></RG>} />
             <Route path="/mortuary" element={<RG path="/mortuary"><SM name="Mortuary"><MortuaryPage /></SM></RG>} />

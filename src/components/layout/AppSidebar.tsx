@@ -6,6 +6,7 @@ import {
   LogOut, HeartPulse, Activity, FolderOpen, X, CalendarDays, Package, Building2, ShieldCheck, Wrench, Users,
 } from "lucide-react";
 import { useCredentialAlert } from "@/contexts/CredentialAlertContext";
+import { useProductMode } from "@/contexts/ProductModeContext";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./SidebarContext";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -18,31 +19,32 @@ interface SidebarItem {
   label: string;
   path: string;
   icon: React.ElementType;
+  moduleKey?: string; // optional: if set, hidden when module is disabled
 }
 
 const topItems: SidebarItem[] = [
   { label: "Dashboard", path: "/dashboard", icon: Home },
   { label: "All Modules", path: "/modules", icon: LayoutGrid },
-  { label: "Patients", path: "/patients", icon: UserPlus },
+  { label: "Patients", path: "/patients", icon: UserPlus, moduleKey: "patients" },
 ];
 
 const quickAccessItems: SidebarItem[] = [
-  { label: "Scheduling", path: "/schedule", icon: CalendarDays },
-  { label: "OPD Queue", path: "/opd", icon: Stethoscope },
-  { label: "IPD / Wards", path: "/ipd", icon: BedDouble },
-  { label: "Billing", path: "/billing", icon: Receipt },
-  { label: "HR & Staff", path: "/hr", icon: Users },
-  { label: "Asset Management", path: "/assets", icon: Package },
-  { label: "CEO Board", path: "/ceo-board", icon: Building2 },
-  { label: "Govt Schemes", path: "/pmjay", icon: HeartPulse },
-  { label: "Lab", path: "/lab", icon: FlaskConical },
-  { label: "Analytics", path: "/analytics", icon: BarChart3 },
+  { label: "Scheduling",       path: "/schedule",    icon: CalendarDays, moduleKey: "opd" },
+  { label: "OPD Queue",        path: "/opd",         icon: Stethoscope,  moduleKey: "opd" },
+  { label: "IPD / Wards",      path: "/ipd",         icon: BedDouble,    moduleKey: "ipd" },
+  { label: "Billing",          path: "/billing",     icon: Receipt,      moduleKey: "billing" },
+  { label: "HR & Staff",       path: "/hr",          icon: Users,        moduleKey: "hr" },
+  { label: "Asset Management", path: "/assets",      icon: Package,      moduleKey: "assets" },
+  { label: "CEO Board",        path: "/ceo-board",   icon: Building2,    moduleKey: "analytics" },
+  { label: "Govt Schemes",     path: "/pmjay",       icon: HeartPulse,   moduleKey: "insurance" },
+  { label: "Lab",              path: "/lab",         icon: FlaskConical, moduleKey: "lab" },
+  { label: "Analytics",        path: "/analytics",   icon: BarChart3,    moduleKey: "analytics" },
 ];
 
 const recordsItems: SidebarItem[] = [
-  { label: "Medical Records", path: "/mrd", icon: FolderOpen },
-  { label: "IPC Dashboard",   path: "/ipc/dashboard", icon: ShieldCheck },
-  { label: "FMS / Safety",    path: "/fms/dashboard", icon: Wrench },
+  { label: "Medical Records", path: "/mrd",          icon: FolderOpen,  moduleKey: "mrd" },
+  { label: "IPC Dashboard",   path: "/ipc/dashboard",icon: ShieldCheck, moduleKey: "ipc" },
+  { label: "FMS / Safety",    path: "/fms/dashboard",icon: Wrench,      moduleKey: "fms" },
 ];
 
 const bottomItems: SidebarItem[] = [
@@ -65,7 +67,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
   const [userName, setUserName] = useState("User");
   const [userInitials, setUserInitials] = useState("U");
 
+  const { isModuleEnabled } = useProductMode();
   const isCollapsed = isMobileOverlay ? false : collapsed;
+
+  const filterItems = (items: SidebarItem[]) =>
+    items.filter((item) =>
+      hasAccess(item.path, role, permissions) &&
+      (!item.moduleKey || isModuleEnabled(item.moduleKey))
+    );
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -143,12 +152,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
 
       {/* Top items */}
       <nav className="flex-shrink-0 flex flex-col gap-1 px-2 pt-3">
-        {topItems.filter(item => hasAccess(item.path, role, permissions)).map(renderItem)}
+        {filterItems(topItems).map(renderItem)}
       </nav>
 
       {/* Scrollable middle */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-sidebar-border [&::-webkit-scrollbar-thumb]:rounded-full">
-        {quickAccessItems.some(item => hasAccess(item.path, role, permissions)) && (
+        {filterItems(quickAccessItems).length > 0 && (
           <>
             <div className="px-4 pt-5 pb-1">
               {!isCollapsed && (
@@ -158,12 +167,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
               )}
             </div>
             <nav className="flex flex-col gap-1 px-2">
-              {quickAccessItems.filter(item => hasAccess(item.path, role, permissions)).map(renderItem)}
+              {filterItems(quickAccessItems).map(renderItem)}
             </nav>
           </>
         )}
 
-        {recordsItems.some(item => hasAccess(item.path, role, permissions)) && (
+        {filterItems(recordsItems).length > 0 && (
           <>
             <div className="px-4 pt-4 pb-1">
               {!isCollapsed && (
@@ -173,7 +182,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
               )}
             </div>
             <nav className="flex flex-col gap-1 px-2">
-              {recordsItems.filter(item => hasAccess(item.path, role, permissions)).map(renderItem)}
+              {filterItems(recordsItems).map(renderItem)}
             </nav>
           </>
         )}
@@ -181,7 +190,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
 
       {/* Bottom items */}
       <nav className="flex-shrink-0 flex flex-col gap-1 px-2 py-4 border-t border-sidebar-border">
-        {bottomItems.filter(item => hasAccess(item.path, role, permissions)).map(renderItem)}
+        {filterItems(bottomItems).map(renderItem)}
       </nav>
 
       {/* User section */}

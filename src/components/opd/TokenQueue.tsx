@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { Video } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -64,6 +65,7 @@ function getWaitMinutes(createdAt: string): string {
  * and showing real-time updates and no-show predictions.
  */
 const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, hospitalId, loading, onTokenCreated }) => {
+  const navigate = useNavigate();
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
   const [activeDept, setActiveDept] = useState<string>("all");
   const [showModal, setShowModal] = useState(false);
@@ -71,6 +73,8 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
   const [predictingIds, setPredictingIds] = useState<Set<string>>(new Set());
   const [reminderSending, setReminderSending] = useState<string | null>(null);
   const [noShowHistory, setNoShowHistory] = useState<Record<string, number>>({});
+  const [callNextLoading, setCallNextLoading] = useState(false);
+  const [lastCalledToken, setLastCalledToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hospitalId) return;
@@ -141,6 +145,70 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
     list.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
     return list;
   }, [tokens, activeDept]);
+
+  // Start or join a teleconsult session for the given token.
+  // Marks the token as "called" so the workspace opens, then navigates to /telemedicine.
+  const handleStartTeleconsult = useCallback(async (token: OpdToken, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (token.status === "waiting") {
+      const now = new Date().toISOString();
+      await supabase
+        .from("opd_tokens")
+        .update({ status: "called", called_at: now } as any)
+        .eq("id", token.id);
+      onTokenCreated(); // refresh list
+    }
+    navigate("/teleconsult/doctor");
+  }, [navigate, onTokenCreated]);
+
+  const handleCallNext = useCallback(async () => {
+    if (!hospitalId || callNextLoading) return;
+    setCallNextLoading(true);
+    try {
+      // Only call in-person (non-teleconsult) waiting tokens.
+      // Teleconsult tokens have their own per-card "Start Teleconsult" action.
+      const waiting = filtered.filter(t => t.status === "waiting" && t.visit_mode !== "teleconsult");
+      if (waiting.length === 0) return;
+      const next = waiting[0];
+
+      const now = new Date().toISOString();
+      // Mark token as "called"
+      await supabase
+        .from("opd_tokens")
+        .update({ status: "called", called_at: now } as any)
+        .eq("id", next.id);
+
+      // Upsert queue_state so TV display picks it up instantly
+      const masked = (() => {
+        const name  = next.patient?.full_name ?? "";
+        const parts = name.trim().split(/\s+/);
+        return parts.length > 1
+          ? `${parts[0][0]}. ${parts.slice(1).join(" ")}`
+          : parts[0] ? `${parts[0][0]}.` : "";
+      })();
+
+      const { data: { user } } = await supabase.auth.getUser();
+
+      await (supabase as any)
+        .from("queue_state")
+        .upsert({
+          hospital_id:          hospitalId,
+          doctor_id:            next.doctor_id,
+          department_id:        next.department_id,
+          current_token_id:     next.id,
+          current_token_number: next.token_number,
+          current_patient_name: masked,
+          called_by:            user?.id ?? null,
+          called_at:            now,
+          updated_at:           now,
+        }, { onConflict: "hospital_id,doctor_id" });
+
+      setLastCalledToken(`${next.token_prefix || "A"}${next.token_number}`);
+      onTokenCreated(); // refresh parent
+    } finally {
+      setCallNextLoading(false);
+    }
+  }, [hospitalId, filtered, callNextLoading, onTokenCreated]);
 
   const waitingCount = tokens.filter((t) => t.status === "waiting").length;
   const inRoomCount = tokens.filter((t) => t.status === "in_consultation").length;
@@ -263,6 +331,11 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
                            (token as any).payer_type === "credit" ? "Credit" : "Other"}
                         </span>
                       )}
+                      {token.visit_mode === "teleconsult" && (
+                        <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-purple-600 text-white flex items-center gap-0.5">
+                          <Video size={8} />Tele
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center justify-between mt-1">
@@ -270,13 +343,25 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
                     <span className="text-[11px] text-slate-400">{getWaitMinutes(token.created_at)}</span>
                   </div>
                   <div className="flex items-center justify-between mt-0.5">
-                    <span className="text-[11px] text-slate-400 truncate max-w-[120px]">{token.department?.name || "—"}</span>
+                    <span className="text-[11px] text-slate-400 truncate max-w-[120px]">
+                      {token.visit_mode === "teleconsult" ? "📹 Online" : (token.department?.name || "—")}
+                    </span>
                     <span className="text-[11px] text-slate-500">{token.doctor?.full_name ? `Dr. ${token.doctor.full_name.split(" ")[0]}` : "—"}</span>
                   </div>
                   {token.status !== "waiting" && (
                     <div className="mt-1.5">
                       <StatusBadge status={token.status} />
                     </div>
+                  )}
+                  {/* Teleconsult action button */}
+                  {token.visit_mode === "teleconsult" && (token.status === "waiting" || token.status === "called") && (
+                    <button
+                      onClick={(e) => handleStartTeleconsult(token, e)}
+                      className="mt-1.5 w-full text-[10px] font-bold text-white bg-purple-600 hover:bg-purple-700 rounded py-1 transition-colors flex items-center justify-center gap-1"
+                    >
+                      <Video size={10} />
+                      {token.status === "called" ? "Join Teleconsult" : "Start Teleconsult"}
+                    </button>
                   )}
                   {/* Send Reminder button for high-risk */}
                   {showRiskBadge && pred.risk_score >= 70 && token.patient?.phone && (
@@ -306,7 +391,20 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
         )}
 
         {/* Footer */}
-        <div className="flex-shrink-0 border-t border-slate-100 p-2">
+        <div className="flex-shrink-0 border-t border-slate-100 p-2 space-y-1.5">
+          {/* Call Next button */}
+          <button
+            onClick={handleCallNext}
+            disabled={callNextLoading || filtered.filter(t => t.status === "waiting").length === 0}
+            className="w-full h-10 rounded-lg text-[13px] font-semibold transition-all active:scale-[0.98] disabled:opacity-40 flex items-center justify-center gap-1.5"
+            style={{ background: "#059669", color: "#FFFFFF" }}
+            title="Call the next waiting patient and update the TV display"
+          >
+            {callNextLoading
+              ? <span className="animate-spin border border-white/40 border-t-white rounded-full w-3.5 h-3.5" />
+              : "📢"}
+            {callNextLoading ? "Calling…" : lastCalledToken ? `Called ${lastCalledToken} · Call Next` : "Call Next Patient"}
+          </button>
           <button
             onClick={() => setShowModal(true)}
             className="w-full h-10 bg-[#1A2F5A] text-white rounded-lg text-[13px] font-semibold hover:bg-[#152647] active:scale-[0.98] transition-all"

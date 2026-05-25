@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronRight, MessageSquare, Send, Calendar, FileText, CreditCard, Receipt, Heart, AlertTriangle, Star, Bell, Zap, Info, Check, X, Download, RotateCcw, ExternalLink } from "lucide-react";
+import { ChevronRight, MessageSquare, Send, Calendar, FileText, CreditCard, Receipt, Heart, AlertTriangle, Star, Bell, Zap, Info, Check, X, Download, RotateCcw, ExternalLink, Loader2, ShieldAlert } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -139,6 +139,17 @@ interface NotifLog {
   patient_id: string;
 }
 
+/** Normalize phone to E.164. Returns null on invalid input. */
+function sanitizePhone(raw: string): string | null {
+  const cleaned = raw.replace(/[\s\-(). ]/g, "");
+  if (!/^\+?\d{10,13}$/.test(cleaned)) return null;
+  if (cleaned.startsWith("+")) return cleaned;
+  if (/^91\d{10}$/.test(cleaned)) return `+${cleaned}`;
+  if (/^0\d{10}$/.test(cleaned)) return `+91${cleaned.slice(1)}`;
+  if (/^\d{10}$/.test(cleaned)) return `+91${cleaned}`;
+  return null;
+}
+
 const SettingsWhatsAppPage: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -150,6 +161,14 @@ const SettingsWhatsAppPage: React.FC = () => {
   const [showWatiForm, setShowWatiForm] = useState(false);
   const [testingWati, setTestingWati] = useState(false);
   const [savingWati, setSavingWati] = useState(false);
+
+  // ── Current user context (for admin gate)
+  const [userRole, setUserRole] = useState<string>("");
+
+  // ── Test message state
+  const [testPhone, setTestPhone] = useState("");
+  const [testMessage, setTestMessage] = useState("");
+  const [sendingTest, setSendingTest] = useState(false);
 
   // ── Templates state
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
@@ -170,10 +189,11 @@ const SettingsWhatsAppPage: React.FC = () => {
 
       const { data: userData } = await supabase
         .from("users")
-        .select("hospital_id")
+        .select("hospital_id, role")
         .eq("auth_user_id", user.id)
         .maybeSingle();
       if (!userData) return;
+      setUserRole((userData as any).role ?? "");
 
       const { data: hospital } = await supabase
         .from("hospitals")
@@ -284,6 +304,50 @@ const SettingsWhatsAppPage: React.FC = () => {
     // Disable auto_send on all templates
     setTemplates((prev) => prev.map((t) => ({ ...t, auto_send: false })));
     toast({ title: "WATI disconnected" });
+  };
+
+  // ── Send test message (admin only) ──────────────────────────────────────────
+  const isAdmin = userRole === "super_admin" || userRole === "hospital_admin";
+
+  const handleSendTest = async () => {
+    const cleanPhone = sanitizePhone(testPhone);
+    if (!cleanPhone) {
+      toast({
+        title: "Invalid phone number",
+        description: "Enter a valid mobile: +91XXXXXXXXXX or 10 digits",
+        variant: "destructive",
+      });
+      return;
+    }
+    const cleanMsg = testMessage.trim().slice(0, 500);
+    if (!cleanMsg) {
+      toast({ title: "Message text is required", variant: "destructive" });
+      return;
+    }
+
+    setSendingTest(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-whatsapp-test", {
+        body: { phone: cleanPhone, message: cleanMsg },
+      });
+      if (error || !(data as any)?.success) {
+        toast({
+          title: "Test message failed",
+          description: (data as any)?.error ?? error?.message ?? "Provider returned an error — check connector config",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: `Test message sent via ${(data as any).provider}`,
+          description: (data as any).messageId
+            ? `Message ID: ${(data as any).messageId}`
+            : "Message dispatched successfully",
+        });
+      }
+    } catch (e: any) {
+      toast({ title: "Unexpected error", description: e.message, variant: "destructive" });
+    }
+    setSendingTest(false);
   };
 
   // ── Template updates
@@ -476,7 +540,74 @@ const SettingsWhatsAppPage: React.FC = () => {
             </div>
           </Card>
 
-          {/* ══ SECTION 2: NOTIFICATION TEMPLATES ══ */}
+          {/* ══ SECTION 2: SEND TEST MESSAGE (admin only) ══ */}
+          {isAdmin ? (
+            <Card className="p-5">
+              <div className="flex items-center gap-2 mb-1">
+                <Send size={15} className="text-primary" />
+                <h2 className="text-sm font-bold text-foreground">Send Test Message</h2>
+                <Badge variant="secondary" className="text-[10px] ml-1 bg-amber-100 text-amber-800 border-amber-200">
+                  Admin only
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mb-4">
+                Verify your WhatsApp connector end-to-end. Uses WATI if connected, otherwise falls back to the active provider in Integrations Hub.
+              </p>
+              <div className="space-y-3 max-w-sm">
+                <div>
+                  <label className="text-xs font-medium text-foreground">Recipient Phone Number</label>
+                  <Input
+                    value={testPhone}
+                    onChange={(e) => setTestPhone(e.target.value)}
+                    placeholder="+91 98765 43210"
+                    maxLength={16}
+                    className="mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    E.164 format (+91XXXXXXXXXX) or 10-digit Indian mobile
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-foreground">Message</label>
+                  <Textarea
+                    value={testMessage}
+                    onChange={(e) => setTestMessage(e.target.value.slice(0, 500))}
+                    placeholder="This is a test from [Hospital Name] WhatsApp integration. Please ignore."
+                    rows={3}
+                    className="mt-1 text-sm resize-none"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-0.5 text-right">
+                    {testMessage.length}/500
+                  </p>
+                </div>
+                <Button
+                  onClick={handleSendTest}
+                  disabled={sendingTest || !testPhone.trim() || !testMessage.trim()}
+                  className="gap-2"
+                >
+                  {sendingTest
+                    ? <><Loader2 size={14} className="animate-spin" /> Sending…</>
+                    : <><Send size={14} /> Send Test</>
+                  }
+                </Button>
+              </div>
+              {!watiConnected && (
+                <div className="mt-3 flex items-center gap-1.5 text-amber-600">
+                  <AlertTriangle size={12} />
+                  <span className="text-[11px]">No WATI connected — will attempt active provider from Integrations Hub.</span>
+                </div>
+              )}
+            </Card>
+          ) : userRole ? (
+            <Card className="p-4 flex items-center gap-3 border-dashed">
+              <ShieldAlert size={16} className="text-muted-foreground shrink-0" />
+              <p className="text-xs text-muted-foreground">
+                Send Test Message is restricted to hospital admins.
+              </p>
+            </Card>
+          ) : null}
+
+          {/* ══ SECTION 3: NOTIFICATION TEMPLATES ══ */}
           <div>
             <h2 className="text-base font-bold text-foreground mb-4">Notification Templates</h2>
             <div className="space-y-2.5">
@@ -603,7 +734,7 @@ const SettingsWhatsAppPage: React.FC = () => {
             </div>
           </div>
 
-          {/* ══ SECTION 3: SEND LOG ══ */}
+          {/* ══ SECTION 4: SEND LOG ══ */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-foreground">Recent Notifications</h2>

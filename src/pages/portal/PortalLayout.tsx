@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { Home, Calendar, FlaskConical, Receipt, User, LogOut } from "lucide-react";
+import { Home, Calendar, FlaskConical, Receipt, Video, User, LogOut } from "lucide-react";
 
 interface PortalLayoutProps {
   children: React.ReactNode;
@@ -11,11 +11,12 @@ interface PortalLayoutProps {
 }
 
 const tabs = [
-  { path: "/portal/dashboard", icon: Home, label: "Home" },
-  { path: "/portal/appointments", icon: Calendar, label: "Appts" },
-  { path: "/portal/reports", icon: FlaskConical, label: "Reports" },
-  { path: "/portal/bills", icon: Receipt, label: "Bills" },
-  { path: "/portal/feedback", icon: User, label: "Profile" },
+  { path: "/portal/dashboard",    icon: Home,         label: "Home"    },
+  { path: "/portal/appointments", icon: Calendar,     label: "Appts"   },
+  { path: "/portal/reports",      icon: FlaskConical, label: "Reports" },
+  { path: "/portal/teleconsult",  icon: Video,        label: "Video"   },
+  { path: "/portal/bills",        icon: Receipt,      label: "Bills"   },
+  { path: "/portal/profile",      icon: User,         label: "Profile" },
 ];
 
 const PortalLayout: React.FC<PortalLayoutProps> = ({

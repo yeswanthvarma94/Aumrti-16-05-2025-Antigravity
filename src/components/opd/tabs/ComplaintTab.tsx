@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Mic } from "lucide-react";
 import type { EncounterData } from "../ConsultationWorkspace";
+import { useVoiceScribeLanguages } from "@/hooks/useVoiceScribeLanguages";
 
 interface Props {
   encounter: EncounterData;
@@ -24,12 +25,13 @@ const ONSETS = ["Sudden", "Gradual", "Insidious"];
 const ComplaintTab: React.FC<Props> = ({ encounter, onChange }) => {
   const [recording, setRecording] = useState(false);
   const [selectedChips, setSelectedChips] = useState<Set<string>>(new Set());
+  const { voiceLang, setVoiceLang, languages } = useVoiceScribeLanguages();
 
   const handleVoice = () => {
     const SR = (window as unknown as Record<string, unknown>).SpeechRecognition || (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
     if (!SR) return;
     const recognition = new (SR as new () => { lang: string; continuous: boolean; interimResults: boolean; onresult: ((e: { results: { 0: { 0: { transcript: string } } } }) => void) | null; onerror: (() => void) | null; onend: (() => void) | null; start: () => void })();
-    recognition.lang = "en-IN";
+    recognition.lang = voiceLang;
     recognition.continuous = false;
     recognition.interimResults = false;
     setRecording(true);
@@ -59,7 +61,26 @@ const ComplaintTab: React.FC<Props> = ({ encounter, onChange }) => {
     <div className="h-full flex flex-col p-4 overflow-y-auto">
       {/* Chief complaint */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <label className="text-xs font-bold text-slate-700 mb-1.5">Chief Complaint *</label>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-xs font-bold text-slate-700">Chief Complaint *</label>
+          {/* Voice language selector — populated from ai_language_settings, persisted per doctor */}
+          <div className="flex items-center gap-1">
+            <Mic className="h-3 w-3 text-slate-400" />
+            <select
+              value={voiceLang}
+              onChange={e => setVoiceLang(e.target.value)}
+              disabled={recording}
+              title="Voice dictation language"
+              className="text-[10px] border border-slate-200 rounded px-1.5 py-0.5 bg-white text-slate-600 outline-none cursor-pointer hover:border-slate-300 disabled:opacity-50"
+            >
+              {languages.map(l => (
+                <option key={l.code} value={l.code}>
+                  {l.flag} {l.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
         <div className="relative flex-1">
           <textarea
             value={encounter.chief_complaint}

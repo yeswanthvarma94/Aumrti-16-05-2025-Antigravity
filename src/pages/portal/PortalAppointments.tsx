@@ -87,11 +87,13 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
   const [selectedDoctor, setSelectedDoctor] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [visitMode, setVisitMode] = useState<"in_person" | "teleconsult">("in_person");
   const [notes, setNotes] = useState("");
   const [voiceLang, setVoiceLang] = useState("en");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [teleconsultSessionId, setTeleconsultSessionId] = useState<string | null>(null);
 
   // Step 1: load departments
   useEffect(() => {
@@ -142,8 +144,19 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
             {selectedDate?.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })} at {selectedSlot}
           </p>
         </div>
+        {visitMode === "teleconsult" && teleconsultSessionId && (
+          <a
+            href={`/join/${teleconsultSessionId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 flex items-center justify-center gap-2 rounded-xl text-white text-sm font-bold py-3 px-4"
+            style={{ background: "#0E7B7B" }}
+          >
+            📹 Join Video Consult
+          </a>
+        )}
         <button
-          onClick={() => { setSuccess(false); setStep(1); setSelectedDept(null); setSelectedDoctor(null); setSelectedDate(null); setSelectedSlot(null); setNotes(""); }}
+          onClick={() => { setSuccess(false); setStep(1); setSelectedDept(null); setSelectedDoctor(null); setSelectedDate(null); setSelectedSlot(null); setNotes(""); setVisitMode("in_person"); setTeleconsultSessionId(null); }}
           className="mt-6 text-sm font-bold"
           style={{ color: "#0E7B7B" }}
         >
@@ -168,7 +181,7 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
 
     const tokenNum = `P${((count || 0) + 1).toString().padStart(3, "0")}`;
 
-    const { error } = await supabase.from("opd_tokens").insert({
+    const { data: tokenData, error } = await supabase.from("opd_tokens").insert({
       hospital_id: session.hospitalId,
       patient_id: session.patientId,
       doctor_id: selectedDoctor.id,
@@ -177,7 +190,32 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
       token_number: tokenNum,
       status: "waiting",
       priority: "normal",
-    });
+      visit_mode: visitMode,
+    } as any).select("id").maybeSingle();
+
+    // If video consult, create a linked teleconsult session
+    let sessionId: string | null = null;
+    if (!error && visitMode === "teleconsult" && tokenData?.id) {
+      const roomId = crypto.randomUUID();
+      const scheduledAt = new Date(`${visitDate}T${selectedSlot?.replace(":", ":")}:00`).toISOString();
+      const { data: tsData } = await (supabase as any)
+        .from("teleconsult_sessions")
+        .insert({
+          hospital_id: session.hospitalId,
+          patient_id: session.patientId,
+          doctor_id: selectedDoctor.id,
+          opd_token_id: tokenData.id,
+          room_id: roomId,
+          scheduled_at: scheduledAt,
+          duration_minutes: 30,
+          patient_phone: session.phone,
+          status: "scheduled",
+        })
+        .select("id")
+        .maybeSingle();
+      sessionId = tsData?.id || null;
+      setTeleconsultSessionId(sessionId);
+    }
 
     setSubmitting(false);
     if (error) {
@@ -197,8 +235,17 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
         time: selectedSlot || undefined,
         tokenNumber: tokenNum,
       });
-      // Auto-open WhatsApp for patient-initiated booking
-      window.open(result.waUrl, "_blank", "noopener,noreferrer");
+      // For teleconsult, send WhatsApp with join link
+      if (visitMode === "teleconsult" && sessionId) {
+        const joinUrl = `${window.location.origin}/join/${sessionId}`;
+        const doctorLine = `Dr. ${selectedDoctor.full_name}`;
+        const msg = `📹 Video Consult Confirmed!\n\nDoctor: ${doctorLine}\nDate: ${dateStr} at ${selectedSlot}\n\nJoin here: ${joinUrl}\n\nPlease join 5 minutes early.`;
+        const clean = session.phone.replace(/\D/g, "");
+        const intl = clean.startsWith("91") ? clean : `91${clean}`;
+        window.open(`https://wa.me/${intl}?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
+      } else {
+        window.open(result.waUrl, "_blank", "noopener,noreferrer");
+      }
       setSuccess(true);
     }
   };
@@ -264,12 +311,35 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
         </>
       )}
 
-      {/* STEP 3 — DATE + TIME */}
+      {/* STEP 3 — VISIT TYPE + DATE + TIME */}
       {step === 3 && (
         <>
           <button onClick={() => setStep(2)} className="flex items-center gap-1 text-sm mb-3" style={{ color: "#0E7B7B" }}>
             <ArrowLeft size={16} /> Back
           </button>
+
+          {/* Visit type toggle */}
+          <p className="text-sm font-bold mb-2" style={{ color: "#0F172A" }}>Visit Type</p>
+          <div className="flex gap-2 mb-4">
+            {[
+              { key: "in_person" as const, label: "🏥 In-Person" },
+              { key: "teleconsult" as const, label: "📹 Video Consult" },
+            ].map((m) => (
+              <button
+                key={m.key}
+                onClick={() => setVisitMode(m.key)}
+                className="flex-1 rounded-xl py-2.5 text-sm font-bold transition-all"
+                style={{
+                  background: visitMode === m.key ? "#0E7B7B" : "#FFFFFF",
+                  color: visitMode === m.key ? "#FFFFFF" : "#374151",
+                  border: visitMode === m.key ? "1.5px solid #0E7B7B" : "1.5px solid #E2E8F0",
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
           <p className="text-base font-bold mb-3" style={{ color: "#0F172A" }}>Select Date</p>
 
           {/* Horizontal date scroller */}
@@ -341,6 +411,7 @@ const BookNewTab: React.FC<{ session: PortalSession }> = ({ session }) => {
             <Row label="Date" value={selectedDate?.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })} />
             <Row label="Time" value={selectedSlot || ""} />
             <Row label="Patient" value={session.fullName} />
+            <Row label="Visit Type" value={visitMode === "teleconsult" ? "📹 Video Consult" : "🏥 In-Person"} />
           </div>
 
           <div className="mt-3">
@@ -402,7 +473,7 @@ const HistoryTab: React.FC<{ session: PortalSession }> = ({ session }) => {
       // Fetch tokens (which serve as appointments)
       const { data: tokens } = await supabase
         .from("opd_tokens")
-        .select("id, token_number, visit_date, status, priority, doctor_id, department_id")
+        .select("id, token_number, visit_date, status, priority, doctor_id, department_id, visit_mode")
         .eq("patient_id", session.patientId)
         .eq("hospital_id", session.hospitalId)
         .order("visit_date", { ascending: false })
@@ -487,10 +558,15 @@ const HistoryTab: React.FC<{ session: PortalSession }> = ({ session }) => {
                     {t.doctorName ? `Dr. ${t.doctorName}` : "Doctor"}
                   </p>
                   <div className="flex items-center justify-between mt-0.5">
-                    <p className="text-xs" style={{ color: "#64748B" }}>
-                      {t.deptName && `${t.deptName} · `}
-                      {new Date(t.visit_date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}
-                    </p>
+                    <div className="flex items-center gap-1.5">
+                      {(t as any).visit_mode === "teleconsult" && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "#EEF9F9", color: "#0E7B7B" }}>📹 Video</span>
+                      )}
+                      <p className="text-xs" style={{ color: "#64748B" }}>
+                        {t.deptName && `${t.deptName} · `}
+                        {new Date(t.visit_date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}
+                      </p>
+                    </div>
                     {t.encounter && (isExp ? <ChevronUp size={14} color="#94A3B8" /> : <ChevronDown size={14} color="#94A3B8" />)}
                   </div>
                 </button>

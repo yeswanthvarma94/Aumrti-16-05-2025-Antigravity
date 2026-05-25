@@ -18,7 +18,7 @@ export interface PortalSession {
 }
 
 const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [loading, setLoading] = useState(false);
@@ -27,7 +27,7 @@ const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
   const [resendTimer, setResendTimer] = useState(0);
   const [hospitalBrand, setHospitalBrand] = useState<{ name: string; logo_url: string | null }>({ name: "Hospital", logo_url: null });
   const [sessionId, setSessionId] = useState("");
-  const [foundPatient, setFoundPatient] = useState<any>(null);
+  const [foundPatients, setFoundPatients] = useState<any[]>([]);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   // Load hospital branding
@@ -56,23 +56,24 @@ const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
     setLoading(true);
     setError("");
 
-    // Find patient
+    // Find patients for this phone (may be multiple family members)
     const query = supabase
       .from("patients")
-      .select("id, full_name, uhid, phone, hospital_id, blood_group")
+      .select("id, full_name, uhid, phone, hospital_id, blood_group, dob, gender")
       .ilike("phone", `%${clean.slice(-10)}`);
 
     if (hospitalId) query.eq("hospital_id", hospitalId);
 
-    const { data: patient } = await query.limit(1).maybeSingle();
+    const { data: patients } = await query.limit(10);
 
-    if (!patient) {
+    if (!patients || patients.length === 0) {
       setError("This number is not registered. Please contact reception.");
       setLoading(false);
       return;
     }
 
-    setFoundPatient(patient);
+    setFoundPatients(patients);
+    const patient = patients[0]; // use first for session creation
 
     // Generate OTP
     const otpCode = String(Math.floor(100000 + Math.random() * 900000));
@@ -126,13 +127,46 @@ const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
     }
   };
 
+  const completeLogin = async (patient: any) => {
+    setLoading(true);
+    const token = crypto.randomUUID();
+
+    if (sessionId) {
+      // Update the existing portal session for this patient
+      await (supabase as any)
+        .from("patient_portal_sessions")
+        .update({ otp_verified: true, session_token: token, patient_id: patient.id } as any)
+        .eq("id", sessionId);
+    }
+
+    localStorage.setItem("portal_session_token", token);
+    localStorage.setItem("portal_patient_id", patient.id);
+
+    const { data: hospital } = await supabase
+      .from("hospitals")
+      .select("name, logo_url")
+      .eq("id", patient.hospital_id)
+      .maybeSingle();
+
+    onLogin({
+      patientId: patient.id,
+      hospitalId: patient.hospital_id,
+      fullName: patient.full_name,
+      uhid: patient.uhid,
+      phone: patient.phone || phone,
+      hospitalName: hospital?.name || "Hospital",
+      hospitalLogo: hospital?.logo_url || null,
+      bloodGroup: patient.blood_group || null,
+    });
+    setLoading(false);
+  };
+
   const verifyOtp = async (code: string) => {
     setLoading(true);
     setError("");
 
     if (code !== generatedOtp) {
       setError("Incorrect code. Try again.");
-      // Shake animation
       const container = document.getElementById("otp-container");
       container?.classList.add("animate-shake");
       setTimeout(() => container?.classList.remove("animate-shake"), 500);
@@ -140,36 +174,14 @@ const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
       return;
     }
 
-    // Update session
-    if (sessionId) {
-      const token = crypto.randomUUID();
-      await supabase
-        .from("patient_portal_sessions")
-        .update({ otp_verified: true, session_token: token } as any)
-        .eq("id", sessionId);
-
-      localStorage.setItem("portal_session_token", token);
-      localStorage.setItem("portal_patient_id", foundPatient.id);
+    // If multiple patients share this phone, show family selector
+    if (foundPatients.length > 1) {
+      setLoading(false);
+      setStep(3);
+      return;
     }
 
-    // Fetch hospital branding
-    const { data: hospital } = await supabase
-      .from("hospitals")
-      .select("name, logo_url")
-      .eq("id", foundPatient.hospital_id)
-      .maybeSingle();
-
-    onLogin({
-      patientId: foundPatient.id,
-      hospitalId: foundPatient.hospital_id,
-      fullName: foundPatient.full_name,
-      uhid: foundPatient.uhid,
-      phone: foundPatient.phone || phone,
-      hospitalName: hospital?.name || "Hospital",
-      hospitalLogo: hospital?.logo_url || null,
-      bloodGroup: foundPatient.blood_group || null,
-    });
-    setLoading(false);
+    await completeLogin(foundPatients[0]);
   };
 
   const handleResend = () => {
@@ -205,10 +217,51 @@ const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
           <p className="text-[13px] text-center mt-1" style={{ color: "#64748B" }}>
             {step === 1
               ? "We'll send a verification code to your phone"
-              : `Enter the 6-digit code sent to +91 ${phone.slice(-10)}`}
+              : step === 2
+              ? `Enter the 6-digit code sent to +91 ${phone.slice(-10)}`
+              : "Select your profile to continue"}
           </p>
 
-          {step === 1 ? (
+          {step === 3 ? (
+            <div className="mt-6 space-y-3">
+              {foundPatients.map((p) => {
+                const age = p.dob
+                  ? Math.floor((Date.now() - new Date(p.dob).getTime()) / (365.25 * 86400000))
+                  : null;
+                const ini = p.full_name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => completeLogin(p)}
+                    disabled={loading}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left active:scale-[0.98] transition-transform disabled:opacity-50"
+                    style={{ border: "1.5px solid #E2E8F0", background: "#FAFAFA" }}
+                  >
+                    <div
+                      className="flex items-center justify-center rounded-full text-white text-sm font-bold shrink-0"
+                      style={{ width: 40, height: 40, background: "#0E7B7B" }}
+                    >
+                      {ini}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[14px] font-bold truncate" style={{ color: "#0F172A" }}>{p.full_name}</p>
+                      <p className="text-[11px]" style={{ color: "#64748B" }}>
+                        UHID: {p.uhid}
+                        {age !== null ? ` · ${age} yrs` : ""}
+                        {p.gender ? ` · ${p.gender}` : ""}
+                      </p>
+                    </div>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2">
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                  </button>
+                );
+              })}
+              {loading && (
+                <p className="text-[13px] text-center" style={{ color: "#94A3B8" }}>Logging in…</p>
+              )}
+            </div>
+          ) : step === 1 ? (
             <div className="mt-6 space-y-4">
               <div>
                 <label className="text-[13px] font-bold" style={{ color: "#0F172A" }}>Mobile Number</label>
@@ -307,7 +360,7 @@ const PortalLogin: React.FC<PortalLoginProps> = ({ hospitalId, onLogin }) => {
                 ← Change phone number
               </button>
             </div>
-          )}
+          ) }
         </div>
       </div>
     </div>

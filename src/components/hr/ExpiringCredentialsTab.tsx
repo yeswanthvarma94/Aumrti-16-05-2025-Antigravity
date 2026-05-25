@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useCredentialAlert, ExpiringCredential } from "@/contexts/CredentialAlertContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -6,6 +6,11 @@ import { Loader2, RefreshCw, Bell, ShieldAlert } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { supabase } from "@/integrations/supabase/client";
+import { useHospitalId } from "@/hooks/useHospitalId";
+
+interface TrendPoint { month: string; count: number; }
 
 const CREDENTIAL_LABEL: Record<string, string> = {
   mci_nmc: "MCI / NMC Registration",
@@ -38,8 +43,37 @@ function rowClass(days: number) {
 
 const ExpiringCredentialsTab: React.FC = () => {
   const { credentials, loading, refresh } = useCredentialAlert();
+  const { hospitalId } = useHospitalId();
   const { toast } = useToast();
   const [remindingId, setRemindingId] = useState<string | null>(null);
+  const [trendData, setTrendData] = useState<TrendPoint[]>([]);
+
+  useEffect(() => {
+    if (!hospitalId) return;
+    const today = new Date();
+    const todayStr = today.toISOString().split("T")[0];
+    const in12 = new Date(today.getFullYear(), today.getMonth() + 12, 1).toISOString().split("T")[0];
+    (supabase as any)
+      .from("staff_credentials")
+      .select("expiry_date")
+      .eq("hospital_id", hospitalId)
+      .not("expiry_date", "is", null)
+      .gte("expiry_date", todayStr)
+      .lte("expiry_date", in12)
+      .then(({ data }: { data: any[] }) => {
+        const counts: Record<string, number> = {};
+        (data || []).forEach((r) => {
+          const key = (r.expiry_date as string).slice(0, 7);
+          counts[key] = (counts[key] || 0) + 1;
+        });
+        const result: TrendPoint[] = [];
+        for (let i = 0; i < 12; i++) {
+          const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+          result.push({ month: format(d, "MMM yy"), count: counts[format(d, "yyyy-MM")] || 0 });
+        }
+        setTrendData(result);
+      });
+  }, [hospitalId]);
 
   const sendReminder = async (cred: ExpiringCredential) => {
     setRemindingId(cred.id);
@@ -73,6 +107,23 @@ const ExpiringCredentialsTab: React.FC = () => {
           Refresh
         </Button>
       </div>
+
+      {trendData.some((d) => d.count > 0) && (
+        <div className="flex-shrink-0 px-5 pt-3 pb-1 border-b border-border bg-card/50">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">12-Month Expiry Trend</p>
+          <ResponsiveContainer width="100%" height={80}>
+            <BarChart data={trendData} margin={{ top: 0, right: 0, bottom: 0, left: -28 }}>
+              <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10 }} allowDecimals={false} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{ fontSize: 11, padding: "4px 8px" }}
+                formatter={(v: number) => [v, "Credentials"]}
+              />
+              <Bar dataKey="count" fill="hsl(var(--destructive))" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-5">
         {loading ? (

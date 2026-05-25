@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { format, subDays, startOfMonth, endOfMonth, subMonths, startOfWeek, endOfWeek } from "date-fns";
-import { RefreshCw, Download, Bot, BarChart2, Calendar, CalendarDays } from "lucide-react";
+import { RefreshCw, Download, Bot, BarChart2, Calendar, CalendarDays, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -63,6 +64,7 @@ function getRange(key: Exclude<QuickRange, "custom">): DateRange {
 }
 
 const AnalyticsPage: React.FC = () => {
+  const navigate = useNavigate();
   const [quickRange, setQuickRange] = useState<QuickRange>("this_month");
   const [activeTab, setActiveTab] = useState("revenue");
   const [lastUpdated, setLastUpdated] = useState(new Date());
@@ -184,6 +186,9 @@ const AnalyticsPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" className="text-[11px] gap-1.5" onClick={() => navigate("/analytics/forecasts")}>
+            <TrendingUp size={14} /> Forecasts
+          </Button>
           <Button size="sm" className="text-[11px] gap-1.5 bg-primary" onClick={() => setActiveTab("digest")}>
             <Bot size={14} /> AI Digest
           </Button>

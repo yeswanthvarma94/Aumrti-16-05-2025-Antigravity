@@ -37,6 +37,8 @@ const TelemedicinePage: React.FC = () => {
   const [activeSession, setActiveSession] = useState<any>(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const [callSeconds, setCallSeconds] = useState(0);
+  const [chiefComplaint, setChiefComplaint] = useState("");
+  const [diagnosis, setDiagnosis] = useState("");
   const [notes, setNotes] = useState("");
   const [rx, setRx] = useState<RxItem[]>([]);
   const [rxDrug, setRxDrug] = useState("");
@@ -94,6 +96,8 @@ const TelemedicinePage: React.FC = () => {
     }).eq("id", session.id);
     setActiveSession({ ...session, status: "in_progress" });
     setCallSeconds(0);
+    setChiefComplaint("");
+    setDiagnosis("");
     setNotes(session.notes || "");
     setRx([]);
     fetchSessions();
@@ -110,6 +114,55 @@ const TelemedicinePage: React.FC = () => {
       actual_duration: callSeconds,
       notes,
     }).eq("id", activeSession.id);
+
+    // 2. Create OPD encounter + prescription if session is linked to a token
+    const opdTokenId = (activeSession as any).opd_token_id;
+    if (opdTokenId && hospitalId && activeSession.patient_id) {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        const { data: doctorRow } = await supabase
+          .from("users")
+          .select("id")
+          .eq("auth_user_id", authData?.user?.id || "")
+          .maybeSingle();
+        const doctorId = doctorRow?.id;
+
+        if (doctorId) {
+          const { data: encounter } = await (supabase as any)
+            .from("opd_encounters")
+            .insert({
+              hospital_id: hospitalId,
+              token_id: opdTokenId,
+              patient_id: activeSession.patient_id,
+              doctor_id: doctorId,
+              visit_date: new Date().toISOString().split("T")[0],
+              chief_complaint: chiefComplaint || undefined,
+              diagnosis: diagnosis || undefined,
+              soap_plan: notes || undefined,
+              visit_mode: "teleconsult",
+            })
+            .select("id")
+            .maybeSingle();
+
+          if (encounter?.id && rx.length > 0) {
+            await (supabase as any).from("prescriptions").insert({
+              hospital_id: hospitalId,
+              encounter_id: encounter.id,
+              patient_id: activeSession.patient_id,
+              doctor_id: doctorId,
+              drugs: rx.map(r => ({ drug: r.drug, dose: r.dose, frequency: r.frequency, days: r.days })),
+              advice_notes: notes || undefined,
+              is_signed: true,
+              signed_at: new Date().toISOString(),
+              whatsapp_sent: activeSession.prescription_sent || false,
+              source: "teleconsult",
+            });
+          }
+        }
+      } catch {
+        // encounter/prescription save failure is non-fatal — billing still proceeds
+      }
+    }
 
     // 2. Auto-bill teleconsultation
     try {
@@ -219,7 +272,7 @@ const TelemedicinePage: React.FC = () => {
     setRxDrug(""); setRxDose(""); setRxFreq(""); setRxDays("");
   };
 
-  const sendRxWhatsApp = () => {
+  const sendRxWhatsApp = async () => {
     if (!activeSession?.patient_phone || rx.length === 0) return;
     const lines = rx.map((r, i) => `${i + 1}. ${r.drug} ${r.dose} — ${r.frequency} × ${r.days} days`).join("\n");
     const msg = `💊 Prescription\n\n${lines}\n\n— From your teleconsult`;
@@ -227,6 +280,7 @@ const TelemedicinePage: React.FC = () => {
     const intl = clean.startsWith("91") ? clean : `91${clean}`;
     window.open(`https://wa.me/${intl}?text=${encodeURIComponent(msg)}`, "_blank", "noopener,noreferrer");
     supabase.from("teleconsult_sessions").update({ prescription_sent: true }).eq("id", activeSession.id);
+    toast({ title: "Prescription sent via WhatsApp" });
   };
 
   const filtered = sessions.filter(s => {
@@ -249,6 +303,20 @@ const TelemedicinePage: React.FC = () => {
           <Button size="sm" variant="outline" onClick={() => setShowSchedule(true)} className="gap-1">
             <Plus size={14} /> Schedule
           </Button>
+        </div>
+
+        {/* Today's stats strip */}
+        <div className="grid grid-cols-3 border-b border-border">
+          {[
+            { label: "Waiting", value: sessions.filter(s => s.status === "waiting").length, color: "text-amber-600" },
+            { label: "Done",    value: sessions.filter(s => s.status === "completed").length, color: "text-emerald-600" },
+            { label: "Missed",  value: sessions.filter(s => s.status === "missed").length,    color: "text-red-500" },
+          ].map(stat => (
+            <div key={stat.label} className="py-2 text-center border-r border-border last:border-r-0">
+              <p className={`text-base font-bold ${stat.color}`}>{stat.value}</p>
+              <p className="text-[10px] text-muted-foreground">{stat.label}</p>
+            </div>
+          ))}
         </div>
 
         <Tabs value={tab} onValueChange={setTab} className="px-2 pt-2">
@@ -340,6 +408,23 @@ const TelemedicinePage: React.FC = () => {
                   <Phone size={10} /> {activeSession.patient_phone}
                 </p>
               )}
+            </div>
+
+            {/* SOAP */}
+            <div className="p-4 border-b border-border space-y-3">
+              <h4 className="text-xs font-bold uppercase text-muted-foreground">SOAP Notes</h4>
+              <Input
+                placeholder="Chief complaint…"
+                value={chiefComplaint}
+                onChange={e => setChiefComplaint(e.target.value)}
+                className="text-xs h-8"
+              />
+              <Input
+                placeholder="Diagnosis…"
+                value={diagnosis}
+                onChange={e => setDiagnosis(e.target.value)}
+                className="text-xs h-8"
+              />
             </div>
 
             {/* Quick Rx */}

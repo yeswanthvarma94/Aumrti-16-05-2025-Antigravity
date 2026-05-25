@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { ChevronLeft } from "lucide-react";
 import BedMap from "@/components/ipd/BedMap";
 import IPDWorkspace from "@/components/ipd/IPDWorkspace";
 import WardStats from "@/components/ipd/WardStats";
@@ -168,6 +170,7 @@ const IPDPage: React.FC = () => {
     return () => { supabase.removeChannel(ch); };
   }, [hospitalId, fetchData]);
 
+  const isMobile = useIsMobile();
   const selectedBed = beds.find((b) => b.id === selectedBedId) || null;
 
   const handleBedSelect = (bedId: string) => {
@@ -187,20 +190,41 @@ const IPDPage: React.FC = () => {
   const occupiedBeds = beds.filter((b) => b.status === "occupied").length;
 
   return (
-    <div className="flex flex-row h-full overflow-hidden">
-      <div className="flex flex-col flex-1 overflow-hidden">
-        {hospitalId && totalBeds > 0 && (
-          <div className="flex-shrink-0 p-3 border-b border-border">
-            <BedForecastCard hospitalId={hospitalId} totalBeds={totalBeds} currentOccupancy={occupiedBeds} />
+    <div className="flex h-full overflow-hidden">
+      {/* Left / main column: forecast + bed map (hidden on mobile when workspace is open) */}
+      {(!isMobile || !selectedBedId) && (
+        <div className="flex flex-col flex-1 overflow-hidden">
+          {hospitalId && totalBeds > 0 && (
+            <div className="flex-shrink-0 p-3 border-b border-border">
+              <BedForecastCard hospitalId={hospitalId} totalBeds={totalBeds} currentOccupancy={occupiedBeds} />
+            </div>
+          )}
+          <div className="flex flex-row flex-1 overflow-hidden">
+            <BedMap beds={beds} selectedBedId={selectedBedId} onSelectBed={handleBedSelect}
+              hospitalId={hospitalId} loading={loading} onRefresh={fetchData} onNewAdmission={handleNewAdmission} />
+            {/* Desktop: workspace beside bed map */}
+            {!isMobile && (
+              <IPDWorkspace bed={selectedBed} hospitalId={hospitalId} userId={userId} onRefresh={fetchData} />
+            )}
           </div>
-        )}
-        <div className="flex flex-row flex-1 overflow-hidden">
-          <BedMap beds={beds} selectedBedId={selectedBedId} onSelectBed={handleBedSelect}
-            hospitalId={hospitalId} loading={loading} onRefresh={fetchData} onNewAdmission={handleNewAdmission} />
+        </div>
+      )}
+
+      {/* Mobile workspace overlay — full screen when bed selected */}
+      {isMobile && selectedBedId && (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <button
+            onClick={() => setSelectedBedId(null)}
+            className="flex-shrink-0 flex items-center gap-1.5 h-11 px-4 bg-card border-b border-border text-sm font-medium text-primary hover:bg-muted/30 w-full text-left"
+          >
+            <ChevronLeft size={16} /> Back to Bed Map
+          </button>
           <IPDWorkspace bed={selectedBed} hospitalId={hospitalId} userId={userId} onRefresh={fetchData} />
         </div>
-      </div>
-      {showWardStats ? (
+      )}
+
+      {/* Ward stats toggle — desktop only */}
+      {!isMobile && (showWardStats ? (
         <WardStats admissions={admissions} onSelectBed={setSelectedBedId} onClose={() => setShowWardStats(false)} />
       ) : (
         <button
@@ -215,7 +239,7 @@ const IPDPage: React.FC = () => {
             Currently Admitted ({admissions.length})
           </span>
         </button>
-      )}
+      ))}
 
       <AdmitPatientModal
         open={admitModal.open}

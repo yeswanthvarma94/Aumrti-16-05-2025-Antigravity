@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { ChevronLeft } from "lucide-react";
 import TokenQueue from "@/components/opd/TokenQueue";
 import ConsultationWorkspace from "@/components/opd/ConsultationWorkspace";
 import PatientSummary from "@/components/opd/PatientSummary";
@@ -12,6 +14,7 @@ export interface OpdToken {
   status: string;
   priority: string;
   visit_date: string;
+  visit_mode?: string | null;
   visit_type?: string | null;
   is_mlc?: boolean | null;
   payer_type?: string | null;
@@ -83,13 +86,50 @@ const OPDPage: React.FC = () => {
     return () => { supabase.removeChannel(channel); };
   }, [hospitalId, fetchTokens]);
 
+  const isMobile = useIsMobile();
   const selectedToken = tokens.find((t) => t.id === selectedTokenId) || null;
 
+  // Mobile: show queue OR workspace, never both at once
+  const showQueue = !isMobile || !selectedTokenId;
+  const showWorkspace = !isMobile || !!selectedTokenId;
+
   return (
-    <div className="flex flex-row h-full overflow-hidden">
-      <TokenQueue tokens={tokens} selectedTokenId={selectedTokenId} onSelectToken={(id) => { setSelectedTokenId(id); setShowPatientDetails(false); }} hospitalId={hospitalId} loading={loading} onTokenCreated={fetchTokens} />
-      <ConsultationWorkspace token={selectedToken} hospitalId={hospitalId} userId={userId} onTokenUpdate={fetchTokens} showPatientDetails={showPatientDetails} onTogglePatientDetails={() => setShowPatientDetails((p) => !p)} />
-      {showPatientDetails && <PatientSummary token={selectedToken} hospitalId={hospitalId} onClose={() => setShowPatientDetails(false)} />}
+    <div className="flex h-full overflow-hidden">
+      {showQueue && (
+        <TokenQueue
+          tokens={tokens}
+          selectedTokenId={selectedTokenId}
+          onSelectToken={(id) => { setSelectedTokenId(id); setShowPatientDetails(false); }}
+          hospitalId={hospitalId}
+          loading={loading}
+          onTokenCreated={fetchTokens}
+        />
+      )}
+      {showWorkspace && (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {isMobile && selectedTokenId && (
+            <button
+              onClick={() => { setSelectedTokenId(null); setShowPatientDetails(false); }}
+              className="flex-shrink-0 flex items-center gap-1.5 h-11 px-4 bg-card border-b border-border text-sm font-medium text-primary hover:bg-muted/30 w-full text-left"
+            >
+              <ChevronLeft size={16} /> Back to Queue
+            </button>
+          )}
+          <div className="flex-1 flex overflow-hidden">
+            <ConsultationWorkspace
+              token={selectedToken}
+              hospitalId={hospitalId}
+              userId={userId}
+              onTokenUpdate={fetchTokens}
+              showPatientDetails={showPatientDetails}
+              onTogglePatientDetails={() => setShowPatientDetails((p) => !p)}
+            />
+            {!isMobile && showPatientDetails && (
+              <PatientSummary token={selectedToken} hospitalId={hospitalId} onClose={() => setShowPatientDetails(false)} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

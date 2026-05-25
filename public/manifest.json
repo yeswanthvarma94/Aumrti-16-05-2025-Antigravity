@@ -2,8 +2,9 @@
   "name": "Aumrti HMS",
   "short_name": "Aumrti",
   "description": "Hospital Management System — Premium Clinical Platform",
-  "start_url": "/",
+  "start_url": "/dashboard",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "background_color": "#ffffff",
   "theme_color": "#1A2F5A",
   "orientation": "any",
@@ -26,13 +27,28 @@
   "shortcuts": [
     {
       "name": "OPD Queue",
+      "short_name": "OPD",
       "url": "/opd",
-      "description": "View today's outpatient queue"
+      "description": "Today's outpatient queue"
+    },
+    {
+      "name": "IPD Wards",
+      "short_name": "IPD",
+      "url": "/ipd",
+      "description": "Inpatient bed map"
     },
     {
       "name": "Billing",
+      "short_name": "Billing",
       "url": "/billing",
       "description": "Billing and collections"
+    },
+    {
+      "name": "Lab",
+      "short_name": "Lab",
+      "url": "/lab",
+      "description": "Laboratory tests and results"
     }
-  ]
+  ],
+  "prefer_related_applications": false
 }

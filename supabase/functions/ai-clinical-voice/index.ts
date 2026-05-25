@@ -125,7 +125,7 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
-    const { transcript, context_type, existing_data } = await req.json();
+    const { transcript, context_type, existing_data, language_code } = await req.json();
 
     if (!transcript?.trim()) {
       return new Response(JSON.stringify({ error: "Transcript is required" }), {
@@ -140,7 +140,25 @@ serve(async (req) => {
       ? `\n\nExisting data already in the form (merge with, don't overwrite unless corrected):\n${JSON.stringify(existing_data)}`
       : "";
 
-    const prompt = `${contextPrompt}${existingContext}
+    // Language instruction: when the doctor dictates in a regional language, instruct the
+    // model to return field VALUES in that language while keeping JSON keys in English.
+    const LANG_LABELS: Record<string, string> = {
+      "hi-IN": "Hindi (हिन्दी)",
+      "te-IN": "Telugu (తెలుగు)",
+      "ta-IN": "Tamil (தமிழ்)",
+      "kn-IN": "Kannada (ಕನ್ನಡ)",
+      "ml-IN": "Malayalam (മലയാളം)",
+      "mr-IN": "Marathi (मराठी)",
+      "bn-IN": "Bengali (বাংলা)",
+      "gu-IN": "Gujarati (ગુજરાતી)",
+      "pa-IN": "Punjabi (ਪੰਜਾਬੀ)",
+    };
+    const langLabel = language_code ? LANG_LABELS[language_code] : null;
+    const langNote = langLabel
+      ? `\n\nIMPORTANT: The doctor dictated in ${langLabel}. Return all text field VALUES in ${langLabel}. Keep JSON keys in English. Medical drug names and ICD codes may remain in English.`
+      : "";
+
+    const prompt = `${contextPrompt}${existingContext}${langNote}
 
 Dictation transcript:
 "${transcript}"`;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useHospitalId } from "@/hooks/useHospitalId";
-import { Calendar, CheckSquare, Palmtree, DollarSign, Users, FileText, ShieldCheck, AlertTriangle, Award, GraduationCap, Clock, BarChart2 } from "lucide-react";
+import { Calendar, CheckSquare, Palmtree, DollarSign, Users, FileText, ShieldCheck, AlertTriangle, Award, GraduationCap, Clock, BarChart2, Link2 } from "lucide-react";
 import NABHBadge from "@/components/nabh/NABHBadge";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ import PrivilegesTab from "@/components/hr/PrivilegesTab";
 import TrainingCMETab from "@/components/hr/TrainingCMETab";
 import StaffInjuriesTab from "@/components/hr/StaffInjuriesTab";
 import ExpiringCredentialsTab from "@/components/hr/ExpiringCredentialsTab";
+import PayrollIntegrationsTab from "@/components/hr/PayrollIntegrationsTab";
 import TrainingComplianceTab from "@/components/hr/TrainingComplianceTab";
 import { Button } from "@/components/ui/button";
 import { useCredentialAlert } from "@/contexts/CredentialAlertContext";
@@ -30,8 +31,9 @@ const navTabs = [
   { id: "privileges",  label: "Privileges",            icon: Award },
   { id: "training",    label: "Training & CME",        icon: GraduationCap },
   { id: "compliance",  label: "Training Compliance",   icon: BarChart2 },
-  { id: "injuries",    label: "Injury Register",       icon: AlertTriangle },
-  { id: "reports",     label: "Reports",               icon: FileText },
+  { id: "injuries",              label: "Injury Register",      icon: AlertTriangle },
+  { id: "payroll_integrations",  label: "Payroll Integrations", icon: Link2 },
+  { id: "reports",               label: "Reports",              icon: FileText },
 ];
 
 const HRPage: React.FC = () => {
@@ -106,7 +108,8 @@ const HRPage: React.FC = () => {
       case "privileges":  return hospitalId ? <PrivilegesTab hospitalId={hospitalId} /> : null;
       case "training":    return hospitalId ? <TrainingCMETab hospitalId={hospitalId} /> : null;
       case "compliance":  return hospitalId ? <TrainingComplianceTab hospitalId={hospitalId} /> : null;
-      case "injuries":    return <StaffInjuriesTab />;
+      case "injuries":               return <StaffInjuriesTab />;
+      case "payroll_integrations":   return hospitalId ? <PayrollIntegrationsTab hospitalId={hospitalId} /> : null;
       default:
         return (
           <div className="flex-1 flex items-center justify-center text-muted-foreground">

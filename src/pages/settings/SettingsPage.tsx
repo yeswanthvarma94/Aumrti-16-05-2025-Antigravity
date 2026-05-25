@@ -33,6 +33,9 @@ import {
   HardDrive,
   KeyRound,
   Cpu,
+  Tv2,
+  Monitor,
+  Languages,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -66,6 +69,7 @@ const settingsGroups: SettingsGroup[] = [
     label: "Structure",
     emoji: "🏗️",
     cards: [
+      { icon: ToggleLeft, title: "Product Mode / SKU", desc: "Clinic, Hospital, Diagnostic, Pharmacy — enable/disable modules for your deployment", route: "/settings/product-mode" },
       { icon: Building2, title: "Departments", desc: "Manage hospital departments and specialties", route: "/settings/departments" },
       { icon: BedDouble, title: "Wards & Beds", desc: "Configure wards, bed count and categories", route: "/settings/wards" },
       { icon: Clock, title: "Shifts", desc: "Define shift timings and patterns", route: "/settings/shifts" },
@@ -100,6 +104,14 @@ const settingsGroups: SettingsGroup[] = [
     ],
   },
   {
+    label: "Queue Display & Kiosk",
+    emoji: "📺",
+    cards: [
+      { icon: Tv2,     title: "TV Queue Display",   desc: "Multi-doctor queue, SpeechSynthesis announcements, language support, marketing banners", route: "/settings/tv-display" },
+      { icon: Monitor, title: "Self-Service Kiosk", desc: "Touch-screen kiosk configuration, device URL, and registration flow settings",           route: "/settings/tv-display" },
+    ],
+  },
+  {
     label: "Workflows",
     emoji: "⚙️",
     cards: [
@@ -115,6 +127,7 @@ const settingsGroups: SettingsGroup[] = [
     label: "Integrations",
     emoji: "🔌",
     cards: [
+      { icon: Cpu, title: "Integrations Console", desc: "Lab analyzers, PACS, WhatsApp multi-provider, Tally ledger mapping", route: "/settings/integrations" },
       { icon: CreditCard, title: "Razorpay Payments", desc: "Payment gateway configuration", route: "/settings/razorpay" },
       { icon: FileSpreadsheet, title: "HMIS / IHIP Portal", desc: "MoHFW portal credentials for report submission", route: "/settings/hmis-portal" },
       { icon: Smartphone, title: "WhatsApp / WATI", desc: "WhatsApp Business API setup", route: "/settings/whatsapp" },
@@ -124,6 +137,7 @@ const settingsGroups: SettingsGroup[] = [
       { icon: KeyRound, title: "API Keys", desc: "Developer API access tokens", route: "/settings/api-keys" },
       { icon: Cpu, title: "API Configuration Hub", desc: "AI providers, API keys, developer tools", route: "/settings/api-hub" },
       { icon: Cpu, title: "AI Features & Attestation", desc: "Enable/disable AI per feature, DPA compliance, doctor attestation policy", route: "/settings/ai-features" },
+      { icon: Languages, title: "AI Language Packs", desc: "Multi-language output for Voice Scribe, Token Display, Discharge Summary — 10+ Indian languages", route: "/settings/ai-languages" },
     ],
   },
   {

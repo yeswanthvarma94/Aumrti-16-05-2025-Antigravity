@@ -5,6 +5,7 @@ import { useVoiceScribe, SessionType, SUPPORTED_LANGUAGES } from "@/contexts/Voi
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useVoiceScribeLanguages } from "@/hooks/useVoiceScribeLanguages";
 
 interface SpeechRecognitionLike {
   lang: string;
@@ -46,6 +47,17 @@ const VoiceDictationButton: React.FC<Props> = ({ sessionType, className, size = 
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const secondsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [adminEngine, setAdminEngine] = useState<string | null>(null);
+
+  // Seed context language from hospital default if the doctor has no saved preference
+  const { hospitalDefaultLang, doctorId } = useVoiceScribeLanguages();
+  useEffect(() => {
+    if (!doctorId || !hospitalDefaultLang) return;
+    const stored = localStorage.getItem(`vscribe_lang_${doctorId}`);
+    if (!stored && hospitalDefaultLang !== selectedLanguage) {
+      setSelectedLanguage(hospitalDefaultLang);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doctorId, hospitalDefaultLang]);
 
   const isWebSpeechSupported = typeof window !== "undefined" && !!(
     (window as unknown as Record<string, unknown>).SpeechRecognition ||
@@ -107,7 +119,7 @@ const VoiceDictationButton: React.FC<Props> = ({ sessionType, className, size = 
     try {
       
       const { data, error } = await supabase.functions.invoke("ai-clinical-voice", {
-        body: { transcript: rawText, context_type: sessionType },
+        body: { transcript: rawText, context_type: sessionType, language_code: selectedLanguage },
       });
       
       if (error || data?.error) throw new Error(data?.error || error?.message);
