@@ -1,7 +1,8 @@
-// WARNING: Patient encounter data (PHI) is sent to ai.gateway.lovable.dev.
-// Ensure a Data Processing Agreement (DPA) covering PHI is in place with Lovable before production use.
+// WARNING: Patient encounter data (PHI) is sent to the configured AI provider.
+// Ensure a Data Processing Agreement (DPA) covering PHI is in place before production use.
 // @ts-ignore: Deno HTTP imports resolved by Supabase Edge Function runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -44,14 +45,6 @@ Deno.serve(async (req: Request) => {
     }
 
     // @ts-ignore: Deno is available in Supabase Edge Functions
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      return new Response(JSON.stringify({ error: "LOVABLE_API_KEY not configured" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // @ts-ignore: Deno is available in Supabase Edge Functions
     const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
     // Resolve hospital from authenticated user (ignore any hospitalId from request body)
@@ -66,6 +59,13 @@ Deno.serve(async (req: Request) => {
       });
     }
     const hospitalId = userData.hospital_id;
+
+    const config = await resolveAiConfig(hospitalId, "generate_clinical_note", 800);
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const { data: encounter, error: encError } = await sb
       .from("opd_encounters")
@@ -93,19 +93,11 @@ Deno.serve(async (req: Request) => {
 
     const start = Date.now();
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Generate a structured clinical note for a ${specialty || "general"} OPD encounter.
+    const aiContent = await callAiChat(config, [
+      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: `Generate a structured clinical note for a ${specialty || "general"} OPD encounter.
 
 Return ONLY a JSON object:
 {
@@ -119,39 +111,17 @@ Return ONLY a JSON object:
 
 Patient clinical context:
 ${clinicalContext || "No additional context provided."}`,
-          },
-        ],
-      }),
-    });
+      },
+    ], 800);
 
     const latencyMs = Date.now() - start;
-
-    if (!aiResponse.ok) {
-      const status = aiResponse.status;
-      if (status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded, try again later" }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted" }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      return new Response(JSON.stringify({ error: "AI service error" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const aiData = await aiResponse.json();
-    const content = aiData.choices?.[0]?.message?.content || "";
-    const tokensUsed = aiData.usage?.total_tokens;
+    const tokensUsed = undefined; // Not available from callAiChat
 
     let result;
     try {
-      result = JSON.parse(content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+      result = JSON.parse(aiContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
     } catch {
-      result = { narrative: content, structuredData: { diagnoses: [], advised_procedures: [] } };
+      result = { narrative: aiContent, structuredData: { diagnoses: [], advised_procedures: [] } };
     }
 
     await sb.from("ai_feature_logs").insert({

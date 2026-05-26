@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -67,10 +68,20 @@ serve(async (req) => {
       });
     }
 
-    const langHint = LANG_HINTS[target_language] || target_language;
+    if (!hospitalId) {
+      return new Response(JSON.stringify({ error: "Hospital not found" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const config = await resolveAiConfig(hospitalId, "translation", 1200);
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const langHint = LANG_HINTS[target_language] || target_language;
 
     const t0 = Date.now();
 
@@ -85,54 +96,27 @@ Rules:
 
     const userPrompt = `Translate the following patient ${context.replace(/_/g, " ")} to ${langHint}:\n\n${content}`;
 
-    const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user",   content: userPrompt },
-        ],
-        max_tokens: 1200,
-        temperature: 0.2,
-      }),
-    });
+    const translatedText = await callAiChat(config, [
+      { role: "system", content: systemPrompt },
+      { role: "user",   content: userPrompt },
+    ], 1200, 0.2);
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error("AI gateway error:", aiRes.status, errText);
-      if (aiRes.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limited — try again in a moment." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error(`AI gateway error: ${aiRes.status}`);
-    }
-
-    const aiJson = await aiRes.json();
-    const translatedText = aiJson.choices?.[0]?.message?.content?.trim() || "";
     const latencyMs = Date.now() - t0;
 
     // Log to ai_feature_logs
-    if (hospitalId) {
-      await (sb as any).from("ai_feature_logs").insert({
-        hospital_id:    hospitalId,
-        patient_id:     patient_id || null,
-        module:         "translation",
-        feature_key:    "translation",
-        success:        true,
-        input_summary:  content.slice(0, 100),
-        output_summary: translatedText.slice(0, 100),
-        latency_ms:     latencyMs,
-      });
-    }
+    await (sb as any).from("ai_feature_logs").insert({
+      hospital_id:    hospitalId,
+      patient_id:     patient_id || null,
+      module:         "translation",
+      feature_key:    "translation",
+      success:        true,
+      input_summary:  content.slice(0, 100),
+      output_summary: translatedText.slice(0, 100),
+      latency_ms:     latencyMs,
+    });
 
     return new Response(
-      JSON.stringify({ translated_text: translatedText, target_language, source_language: "English" }),
+      JSON.stringify({ translated_text: translatedText.trim(), target_language, source_language: "English" }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {

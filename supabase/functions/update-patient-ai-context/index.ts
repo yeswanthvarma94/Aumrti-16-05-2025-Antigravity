@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -89,10 +90,10 @@ serve(async (req) => {
       .slice(0, 5);
 
     // Build AI context summary
-    const apiKey = Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("OPENAI_API_KEY");
+    const config = await resolveAiConfig(hospital_id, "patient_context_summary", 200);
     let contextSummary = "";
 
-    if (apiKey) {
+    if (config) {
       const patientAge = patient?.dob
         ? Math.floor((Date.now() - new Date(patient.dob).getTime()) / 31557600000)
         : null;
@@ -108,26 +109,18 @@ serve(async (req) => {
         recentChiefComplaints: (encounters || []).map((e: any) => e.chief_complaint).filter(Boolean).slice(0, 3),
       };
 
-      const aiRes = await fetch("https://ai.gateway.lovable.dev/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          max_tokens: 200,
-          messages: [
-            {
-              role: "system",
-              content: "You are a clinical summarizer. Write a 2-3 sentence concise patient context summary for AI prompts. Focus on clinically relevant facts only.",
-            },
-            {
-              role: "user",
-              content: `Patient data: ${JSON.stringify(promptData)}. Summarize for AI clinical context injection.`,
-            },
-          ],
-        }),
-      });
-      const aiData = await aiRes.json();
-      contextSummary = aiData?.choices?.[0]?.message?.content || "";
+      const messages = [
+        {
+          role: "system" as const,
+          content: "You are a clinical summarizer. Write a 2-3 sentence concise patient context summary for AI prompts. Focus on clinically relevant facts only.",
+        },
+        {
+          role: "user" as const,
+          content: `Patient data: ${JSON.stringify(promptData)}. Summarize for AI clinical context injection.`,
+        },
+      ];
+
+      contextSummary = await callAiChat(config, messages, 200, 0.3);
     } else {
       contextSummary = [
         chronicConditions.length ? `Known conditions: ${chronicConditions.join(", ")}.` : "",

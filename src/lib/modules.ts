@@ -95,6 +95,7 @@ export const ALL_MODULES: ModuleDefinition[] = [
   { name: "Dietetics & Nutrition", desc: "Nutritional screening, diet orders & AI meal plans", icon: "🥗", route: "/dietetics", category: "Clinical", roles: ["dietitian", "doctor", "super_admin"], isNew: true },
   { name: "Staff Training / LMS", desc: "NABH mandatory training & compliance", icon: "🎓", route: "/lms", category: "Operations", roles: ["hr_manager", "super_admin", "hospital_admin"], isNew: true },
   { name: "CRM & Marketing", desc: "Referrals, campaigns, reviews & segments", icon: "📣", route: "/crm", category: "Operations", roles: ["marketing", "hospital_admin", "super_admin"], isNew: true },
+  { name: "ABDM / ABHA", desc: "ABHA creation, consent management & care context linking", icon: "🛡️", route: "/abdm", category: "Operations", roles: ["receptionist", "doctor", "nurse", "hospital_admin", "super_admin"] },
 
   // ── PATIENT-FACING ──
   { name: "Patient Portal", desc: "Patient self-service", icon: "🌐", route: "/portal", category: "Patient", roles: ["receptionist", "super_admin"] },

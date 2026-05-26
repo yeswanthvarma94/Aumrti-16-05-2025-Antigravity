@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -126,27 +127,23 @@ serve(async (req) => {
       } : null,
     };
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const config = await resolveAiConfig(hospitalId, "revenue_leakage", 700);
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const t0 = Date.now();
-    const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
+    const raw = await callAiChat(config, [
+      {
+        role: "system",
+        content:
+          "You are a hospital revenue cycle analyst for an Indian hospital. You identify revenue leakage patterns and suggest specific, actionable corrective measures. Always respond with valid JSON only — no markdown, no preamble.",
       },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a hospital revenue cycle analyst for an Indian hospital. You identify revenue leakage patterns and suggest specific, actionable corrective measures. Always respond with valid JSON only — no markdown, no preamble.",
-          },
-          {
-            role: "user",
-            content: `Analyse this hospital revenue data and identify the top 3 revenue leakage patterns.
+      {
+        role: "user",
+        content: `Analyse this hospital revenue data and identify the top 3 revenue leakage patterns.
 
 Data:
 ${JSON.stringify(dataSummary, null, 2)}
@@ -171,25 +168,8 @@ Rules:
 - amount_at_risk in INR (integer)
 - department options: Billing, Lab, Pharmacy, OT, OPD, Radiology
 - Be specific to Indian hospital context`,
-          },
-        ],
-        max_tokens: 700,
-        temperature: 0.2,
-      }),
-    });
-
-    if (!aiRes.ok) {
-      const errBody = await aiRes.text();
-      if (aiRes.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limited — try again in a moment." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error(`AI gateway error: ${aiRes.status} — ${errBody}`);
-    }
-
-    const aiJson = await aiRes.json();
-    const raw = aiJson.choices?.[0]?.message?.content?.trim() || "";
+      },
+    ], 700, 0.2);
 
     let analysisResult: { patterns: LeakPattern[]; total_estimated_leak: number; summary: string };
     try {

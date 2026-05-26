@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { resolveAiConfig, resolveAiConfigFromEnv, callAiVision } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,11 +10,19 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { base64Image, mediaType } = await req.json();
+    const { base64Image, mediaType, hospital_id } = await req.json();
     if (!base64Image) throw new Error("No image provided");
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    // Resolve AI config: try DB config if hospital_id provided, then env fallback
+    const config = hospital_id
+      ? (await resolveAiConfig(hospital_id, "document_ocr", 2000)) ?? resolveAiConfigFromEnv(2000)
+      : resolveAiConfigFromEnv(2000);
+
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const extractionPrompt = `This is a vendor invoice/delivery challan from an Indian medical/pharmaceutical supplier.
 
@@ -47,53 +56,7 @@ Rules:
 - confidence: your confidence in the extraction accuracy
 - Return ONLY valid JSON, no other text or markdown`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:${mediaType || "image/jpeg"};base64,${base64Image}`,
-                },
-              },
-              {
-                type: "text",
-                text: extractionPrompt,
-              },
-            ],
-          },
-        ],
-        max_tokens: 2000,
-      }),
-    });
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add funds in Settings > Workspace > Usage." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errText = await response.text();
-      console.error("AI gateway error:", response.status, errText);
-      throw new Error(`AI gateway error: ${response.status}`);
-    }
-
-    const aiData = await response.json();
-    const rawText = aiData.choices?.[0]?.message?.content || "";
+    const rawText = await callAiVision(config, base64Image, mediaType || "image/jpeg", extractionPrompt, 2000);
 
     // Clean and parse JSON
     const cleaned = rawText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -73,8 +74,12 @@ serve(async (req) => {
     const activeMeds = meds.filter((m: any) => m.is_active !== false);
     const medsText = activeMeds.map((m: any) => `${m.drug_name} ${m.dose} ${m.frequency} ${m.route || ""}`.trim()).join(", ") || "None";
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const config = await resolveAiConfig(admission.hospital_id, "discharge_summary", 1500);
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const prompt = `You are a clinical documentation AI for an Indian hospital. Generate a structured discharge summary.
 
@@ -118,31 +123,11 @@ Return ONLY valid JSON (no markdown):
   "reasoning": "One sentence explaining confidence"
 }`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: "You are a clinical documentation AI for Indian hospitals. Always return valid JSON only, no markdown." },
-          { role: "user", content: prompt },
-        ],
-      }),
-    });
+    const content = await callAiChat(config, [
+      { role: "system", content: "You are a clinical documentation AI for Indian hospitals. Always return valid JSON only, no markdown." },
+      { role: "user", content: prompt },
+    ], 1500);
 
-    if (!response.ok) {
-      const t = await response.text();
-      console.error("AI gateway error:", response.status, t);
-      if (response.status === 429) return new Response(JSON.stringify({ error: "Rate limited, try again later." }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      if (response.status === 402) return new Response(JSON.stringify({ error: "AI credits exhausted." }), { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      throw new Error(`AI gateway error: ${response.status}`);
-    }
-
-    const result = await response.json();
-    const content = result.choices?.[0]?.message?.content || "{}";
     const cleaned = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
 
     let structured: Record<string, unknown>;

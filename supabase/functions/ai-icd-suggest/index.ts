@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,8 +8,8 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// WARNING: Clinical data (PHI) is sent to ai.gateway.lovable.dev.
-// Ensure a Data Processing Agreement (DPA) covering PHI is in place with Lovable before production use.
+// WARNING: Clinical data (PHI) is sent to the configured AI provider.
+// Ensure a Data Processing Agreement (DPA) covering PHI is in place before production use.
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -32,13 +33,6 @@ serve(async (req) => {
     if (!visit_type || !visit_id) {
       return new Response(JSON.stringify({ error: "visit_type, visit_id required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      return new Response(JSON.stringify({ error: "LOVABLE_API_KEY not configured" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -109,22 +103,21 @@ serve(async (req) => {
       });
     }
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
+    const config = await resolveAiConfig(hospital_id, "icd_coding", 600);
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const aiContent = await callAiChat(config, [
+      {
+        role: "system",
+        content: "You are a medical coding specialist trained in ICD-10-CM. Given clinical documentation, suggest the most appropriate primary ICD-10 code. Always respond with valid JSON only.",
       },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          {
-            role: "system",
-            content: "You are a medical coding specialist trained in ICD-10-CM. Given clinical documentation, suggest the most appropriate primary ICD-10 code. Always respond with valid JSON only.",
-          },
-          {
-            role: "user",
-            content: `Based on this clinical documentation, suggest the most appropriate primary ICD-10 code.
+      {
+        role: "user",
+        content: `Based on this clinical documentation, suggest the most appropriate primary ICD-10 code.
 
 Return ONLY a JSON object:
 {
@@ -139,74 +132,16 @@ Return ONLY a JSON object:
 
 Clinical documentation:
 ${clinicalText}`,
-          },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "suggest_icd_codes",
-              description: "Return ICD-10 code suggestions for clinical documentation",
-              parameters: {
-                type: "object",
-                properties: {
-                  primary_code: { type: "string", description: "ICD-10 code e.g. J18.9" },
-                  primary_description: { type: "string", description: "Description of the code" },
-                  confidence: { type: "number", description: "Confidence 0-1" },
-                  secondary_suggestions: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        code: { type: "string" },
-                        description: { type: "string" },
-                      },
-                      required: ["code", "description"],
-                    },
-                  },
-                  reasoning: { type: "string", description: "Why this code fits" },
-                },
-                required: ["primary_code", "primary_description", "confidence", "reasoning"],
-              },
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "suggest_icd_codes" } },
-      }),
-    });
+      },
+    ], 600, 0.2);
 
-    if (!aiResponse.ok) {
-      const status = aiResponse.status;
-      const errText = await aiResponse.text();
-      console.error("AI gateway error:", status, errText);
-      if (status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded, please try again later" }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted" }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    let suggestion;
+    try {
+      suggestion = JSON.parse(aiContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
+    } catch {
       return new Response(JSON.stringify({ error: "AI service error" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-    }
-
-    const aiData = await aiResponse.json();
-
-    let suggestion;
-    // Try tool_calls first
-    const toolCall = aiData.choices?.[0]?.message?.tool_calls?.[0];
-    if (toolCall?.function?.arguments) {
-      suggestion = typeof toolCall.function.arguments === "string"
-        ? JSON.parse(toolCall.function.arguments)
-        : toolCall.function.arguments;
-    } else {
-      // Fallback: parse from content
-      const content = aiData.choices?.[0]?.message?.content || "";
-      suggestion = JSON.parse(content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
     }
 
     return new Response(JSON.stringify(suggestion), {

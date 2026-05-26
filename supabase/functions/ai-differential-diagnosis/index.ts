@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { resolveAiConfig, resolveAiConfigFromEnv, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,18 +10,22 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const apiKey = Deno.env.get("LOVABLE_API_KEY") || Deno.env.get("OPENAI_API_KEY");
-    if (!apiKey) {
-      return new Response(JSON.stringify({ error: "AI API key not configured" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const { chief_complaint, vitals, examination, age, gender, history, patient_context } = await req.json();
+    const { chief_complaint, vitals, examination, age, gender, history, patient_context, hospital_id } = await req.json();
 
     if (!chief_complaint) {
       return new Response(JSON.stringify({ error: "chief_complaint is required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Resolve AI config: try DB config if hospital_id provided, then env fallback
+    const config = hospital_id
+      ? (await resolveAiConfig(hospital_id, "differential_diagnosis", 1000)) ?? resolveAiConfigFromEnv(1000)
+      : resolveAiConfigFromEnv(1000);
+
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -58,32 +63,12 @@ Generate top 4 differential diagnoses ranked by likelihood. Return JSON:
   "overall_urgency": "emergent|urgent|routine"
 }`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        max_tokens: 1000,
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        response_format: { type: "json_object" },
-      }),
-    });
+    const content = await callAiChat(config, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], 1000, 0.2);
 
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`AI API error: ${err}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || "{}";
-    const parsed = JSON.parse(content);
+    const parsed = JSON.parse(content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim());
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -5,6 +5,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,7 +18,7 @@ const json = (body: unknown, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
-// ── AI call helper (calls the ai-proxy function) ──────────
+// ── AI call helper ────────────────────────────────────────
 async function callAIProxy(
   supabaseUrl: string,
   serviceKey: string,
@@ -26,71 +27,14 @@ async function callAIProxy(
   featureKey: string,
   maxTokens = 400
 ): Promise<string> {
-  // Get the hospital's AI config
-  const adminClient = createClient(supabaseUrl, serviceKey);
-  const { data: aiConfig } = await adminClient
-    .from("ai_provider_config")
-    .select("provider, model_name, temperature")
-    .eq("hospital_id", hospitalId)
-    .eq("feature_key", featureKey)
-    .eq("is_active", true)
-    .maybeSingle();
+  const config = await resolveAiConfig(hospitalId, featureKey, maxTokens);
+  if (!config) return "";
 
-  const cfg = aiConfig || await adminClient
-    .from("ai_provider_config")
-    .select("provider, model_name, temperature")
-    .eq("hospital_id", hospitalId)
-    .eq("feature_key", "global_default")
-    .eq("is_active", true)
-    .maybeSingle().then(r => r.data);
-
-  if (!cfg) return "";
-
-  const { data: apiKeyRow } = await adminClient
-    .from("api_configurations")
-    .select("api_key")
-    .eq("hospital_id", hospitalId)
-    .eq("service_key", cfg.provider === "claude" ? "anthropic" : cfg.provider)
-    .eq("is_active", true)
-    .maybeSingle();
-
-  if (!apiKeyRow?.api_key) return "";
-
-  // Direct AI call from the Edge Function (server-side)
-  if (cfg.provider === "claude") {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKeyRow.api_key,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: cfg.model_name || "claude-3-5-haiku-20241022",
-        max_tokens: maxTokens,
-        temperature: Number(cfg.temperature) || 0.3,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const data = await res.json();
-    return data.content?.[0]?.text || "";
+  try {
+    return await callAiChat(config, [{ role: "user", content: prompt }], maxTokens);
+  } catch (_) {
+    return "";
   }
-
-  if (cfg.provider === "openai") {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKeyRow.api_key}` },
-      body: JSON.stringify({
-        model: cfg.model_name || "gpt-4o-mini",
-        max_tokens: maxTokens,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || "";
-  }
-
-  return "";
 }
 
 // ── Log automation event ──────────────────────────────────

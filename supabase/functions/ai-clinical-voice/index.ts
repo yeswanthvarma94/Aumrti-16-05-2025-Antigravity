@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, resolveAiConfigFromEnv, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -120,10 +121,9 @@ serve(async (req) => {
       });
     }
 
-    // WARNING: Clinical voice transcript is sent to ai.gateway.lovable.dev.
-    // Ensure a Data Processing Agreement (DPA) covering PHI is in place with Lovable before production use.
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
+    const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { data: userData } = await sb.from("users").select("hospital_id").eq("auth_user_id", user.id).maybeSingle();
+    const hospitalId = userData?.hospital_id as string | null;
 
     const { transcript, context_type, existing_data, language_code } = await req.json();
 
@@ -131,6 +131,16 @@ serve(async (req) => {
       return new Response(JSON.stringify({ error: "Transcript is required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const config = hospitalId
+      ? (await resolveAiConfig(hospitalId, "voice_scribe", 1200)) ?? resolveAiConfigFromEnv(1200)
+      : resolveAiConfigFromEnv(1200);
+
+    if (!config) {
+      return new Response(JSON.stringify({ error: "No AI provider configured. Go to Settings → API Hub." }), {
+        status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -163,47 +173,20 @@ serve(async (req) => {
 Dictation transcript:
 "${transcript}"`;
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
+    const messages = [
+      {
+        role: "system" as const,
+        content: "You are a clinical documentation assistant for Indian hospitals. Parse doctor voice dictations into structured medical data. Use standard Indian medical terminology and drug names. Always return valid JSON only, no markdown wrapping. Do not include any explanation or text outside the JSON object.",
       },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          {
-            role: "system",
-            content: "You are a clinical documentation assistant for Indian hospitals. Parse doctor voice dictations into structured medical data. Use standard Indian medical terminology and drug names. Always return valid JSON only, no markdown wrapping. Do not include any explanation or text outside the JSON object.",
-          },
-          { role: "user", content: prompt },
-        ],
-      }),
-    });
+      { role: "user" as const, content: prompt },
+    ];
 
-    if (!response.ok) {
-      const t = await response.text();
-      console.error("AI gateway error:", response.status, t);
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limited, please try again later." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Add funds in Settings." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error(`AI gateway error: ${response.status}`);
-    }
+    const rawContent = await callAiChat(config, messages, 1200, 0.3);
+    console.log("AI raw response (first 500):", rawContent.substring(0, 500));
 
-    const result = await response.json();
-    console.log("AI raw response:", JSON.stringify(result).substring(0, 500));
-    
-    const content = result.choices?.[0]?.message?.content || "{}";
-    const cleaned = content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    const cleaned = rawContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     console.log("Cleaned content:", cleaned.substring(0, 300));
-    
+
     let structured: Record<string, unknown>;
     try {
       structured = JSON.parse(cleaned);

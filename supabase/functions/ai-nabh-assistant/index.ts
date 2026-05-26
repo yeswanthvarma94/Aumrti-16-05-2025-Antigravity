@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, resolveAiConfigFromEnv, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -441,27 +442,6 @@ NABH COMPLIANCE MOVEMENT: [compliance status changes]
 ACTION REQUIRED: [2–3 most urgent items needing Medical Superintendent attention]
 
 Base every statement strictly on the data provided. Do not invent numbers or events not in the data.`
-      ? `You are an expert NABH (National Accreditation Board for Hospitals & Healthcare Providers) consultant writing a Weekly Quality Digest for the Medical Superintendent of an Indian hospital.
-
-Write a concise professional narrative — PLAIN TEXT ONLY, no JSON, no markdown, no bullet symbols. Maximum 300 words.
-
-Use this exact structure (write each heading on its own line followed by 1–2 sentences):
-
-NABH WEEKLY QUALITY DIGEST – [date range from data]
-
-PATIENT SAFETY: [findings from safety events data]
-
-INFECTION CONTROL: [findings from IPC data]
-
-CLINICAL AUDITS: [audit activity summary]
-
-GOVERNANCE & CAPA: [overdue actions summary]
-
-NABH COMPLIANCE MOVEMENT: [compliance status changes]
-
-ACTION REQUIRED: [2–3 most urgent items needing Medical Superintendent attention]
-
-Base every statement strictly on the data provided. Do not invent numbers or events not in the data.`
       : `You are an expert NABH (National Accreditation Board for Hospitals & Healthcare Providers) consultant specialising in Indian hospital accreditation under the 6th Edition standards.
 
 Your role: analyse hospital compliance data and provide concise, actionable NABH guidance.
@@ -534,80 +514,17 @@ Equipment: [device/material issues, or "Not applicable"]
 Environment: [physical environment, workload, or "Not applicable"]`;
     }
 
-    // ── AI Call (Lovable gateway → Anthropic → OpenAI) ────────────────────────
+    // ── AI Call using shared config helper ────────────────────────────────────
 
-    let responseText = "";
-
-    const lovableKey = Deno.env.get("LOVABLE_API_KEY");
-    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
-    const openaiKey = Deno.env.get("OPENAI_API_KEY");
-
-    if (lovableKey && !responseText) {
-      try {
-        const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${lovableKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-          }),
-        });
-        if (aiRes.ok) {
-          const d = await aiRes.json();
-          responseText = d.choices?.[0]?.message?.content || "";
-        }
-      } catch (_) { /* try next provider */ }
+    const config = (await resolveAiConfig(hospital_id, "nabh_evidence", 1024)) ?? resolveAiConfigFromEnv(1024);
+    if (!config) {
+      return json({ error: "No AI provider configured. Go to Settings → API Hub." }, 503);
     }
 
-    if (anthropicKey && !responseText) {
-      try {
-        const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": anthropicKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 1024,
-            system: systemPrompt,
-            messages: [{ role: "user", content: userPrompt }],
-          }),
-        });
-        if (aiRes.ok) {
-          const d = await aiRes.json();
-          responseText = d.content?.[0]?.text || "";
-        }
-      } catch (_) { /* try next */ }
-    }
-
-    if (openaiKey && !responseText) {
-      try {
-        const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            max_tokens: 1024,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-          }),
-        });
-        if (aiRes.ok) {
-          const d = await aiRes.json();
-          responseText = d.choices?.[0]?.message?.content || "";
-        }
-      } catch (_) { /* exhausted */ }
-    }
-
-    if (!responseText) {
-      return json({ error: "No AI provider configured. Add LOVABLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY to edge function secrets." }, 503);
-    }
+    const responseText = await callAiChat(config, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], 1024, 0.4);
 
     // ── RCA draft: return plain text directly, skip JSON parsing ──────────────
     if (isRcaDraft) {

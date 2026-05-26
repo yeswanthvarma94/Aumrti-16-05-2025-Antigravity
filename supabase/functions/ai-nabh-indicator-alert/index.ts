@@ -25,6 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAiConfig, resolveAiConfigFromEnv, callAiChat } from "../_shared/ai-config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -282,11 +283,12 @@ async function computeIndicators(
   return results;
 }
 
-// ─── AI call (same multi-provider pattern as other edge functions) ────────────
+// ─── AI call using shared helper ─────────────────────────────────────────────
 
-async function callAI(
+async function generateIndicatorAlert(
   indicator: IndicatorResult,
   hospitalName: string,
+  hospitalId: string,
 ): Promise<string> {
   const direction = indicator.deviationPct > 0 ? "increased" : "decreased";
   const absDeviation = Math.abs(indicator.deviationPct);
@@ -301,52 +303,25 @@ Change: ${direction} by ${absDeviation}% vs baseline
 
 Write the 2-sentence NABH QI anomaly alert.`;
 
-  const lovableKey  = Deno.env.get("LOVABLE_API_KEY");
-  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
-  const openaiKey   = Deno.env.get("OPENAI_API_KEY");
+  const config = (await resolveAiConfig(hospitalId, "nabh_evidence", 200)) ?? resolveAiConfigFromEnv(200);
 
-  let text = "";
-
-  if (lovableKey && !text) {
-    try {
-      const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${lovableKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }),
-      });
-      if (res.ok) text = (await res.json())?.choices?.[0]?.message?.content || "";
-    } catch (_) {}
-  }
-
-  if (anthropicKey && !text) {
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": anthropicKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 200, system: systemPrompt, messages: [{ role: "user", content: userPrompt }] }),
-      });
-      if (res.ok) text = (await res.json())?.content?.[0]?.text || "";
-    } catch (_) {}
-  }
-
-  if (openaiKey && !text) {
-    try {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "gpt-4o-mini", max_tokens: 200, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }] }),
-      });
-      if (res.ok) text = (await res.json())?.choices?.[0]?.message?.content || "";
-    } catch (_) {}
-  }
-
-  // Fallback if no AI configured
-  if (!text) {
+  if (!config) {
+    // Fallback if no AI configured
     const direction2 = indicator.deviationPct > 0 ? "risen" : "fallen";
-    text = `${indicator.label} has ${direction2} to ${indicator.currentValue}${indicator.unit} this week, a ${Math.abs(indicator.deviationPct)}% deviation from the 4-week baseline of ${indicator.baselineValue}${indicator.unit}. Immediate review is recommended to identify contributing factors and initiate corrective action.`;
+    return `${indicator.label} has ${direction2} to ${indicator.currentValue}${indicator.unit} this week, a ${Math.abs(indicator.deviationPct)}% deviation from the 4-week baseline of ${indicator.baselineValue}${indicator.unit}. Immediate review is recommended to identify contributing factors and initiate corrective action.`;
   }
 
-  return text.trim();
+  try {
+    const text = await callAiChat(config, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], 200, 0.3);
+    return text.trim();
+  } catch (_) {
+    // Fallback on error
+    const direction2 = indicator.deviationPct > 0 ? "risen" : "fallen";
+    return `${indicator.label} has ${direction2} to ${indicator.currentValue}${indicator.unit} this week, a ${Math.abs(indicator.deviationPct)}% deviation from the 4-week baseline of ${indicator.baselineValue}${indicator.unit}. Immediate review is recommended to identify contributing factors and initiate corrective action.`;
+  }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -420,7 +395,7 @@ serve(async (req) => {
 
         if ((existing ?? 0) > 0) continue;  // already alerted this week
 
-        const aiMessage = await callAI(ind, hospital.name);
+        const aiMessage = await generateIndicatorAlert(ind, hospital.name, hospital.id);
 
         await sb.from("clinical_alerts").insert({
           hospital_id: hospital.id,

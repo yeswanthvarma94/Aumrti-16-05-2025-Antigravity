@@ -415,9 +415,11 @@ const Dashboard: React.FC = () => {
               <NABHReadinessCard hospitalId={hospitalId} />
             )}
 
-            {/* Card 9 - ABDM Compliance */}
+            {/* Card 9 - ABDM Compliance (spans 2 cols so horizontal layout fits) */}
             {hasAccess("/abdm", role, permissions) && hospitalId && (
-              <ABDMComplianceCard hospitalId={hospitalId} />
+              <div className="col-span-2">
+                <ABDMComplianceCard hospitalId={hospitalId} />
+              </div>
             )}
           </div>
 
