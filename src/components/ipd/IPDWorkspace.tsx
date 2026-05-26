@@ -32,6 +32,8 @@ import AnaesthesiaSheet from "@/components/specialty/AnaesthesiaSheet";
 import OphthalmologySheet from "@/components/specialty/OphthalmologySheet";
 import { AlertTriangle, FlaskConical, ScanLine, Pill, Microphone, ClipboardList, CheckCircle2 } from "lucide-react";
 import { getNEWS2BadgeClasses, getNEWS2Level } from "@/lib/news2";
+import ABDMCareContextsPanel from "@/components/abdm/ABDMCareContextsPanel";
+import ConsentStatusBanner from "@/components/abdm/ConsentStatusBanner";
 import RxOrdersTab from "@/components/opd/tabs/RxOrdersTab";
 import { useVoiceScribe } from "@/contexts/VoiceScribeContext";
 import type { PrescriptionData, DrugEntry, LabOrder, RadiologyOrder } from "@/components/opd/ConsultationWorkspace";
@@ -59,6 +61,7 @@ export interface PatientDetails {
   allergies: string | null;
   chronic_conditions: string[] | null;
   insurance_id: string | null;
+  abha_id?: string | null;
 }
 
 interface AdmissionEstimate {
@@ -664,6 +667,8 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
         </div>
       </div>
 
+      {patient?.id && <ConsentStatusBanner patientId={patient.id} />}
+
       {/* Tab strip */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="flex-shrink-0 h-11 w-full justify-start rounded-none bg-card border-b border-border px-2 gap-0">
@@ -680,6 +685,7 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
             { v: "nursing_kardex", l: "🩺 Kardex" },
             { v: "ipc_devices", l: "🦠 IPC/Devices" },
             ...(specialty ? [{ v: "specialty", l: `${specialtyTabMeta[specialty].icon} ${specialtyTabMeta[specialty].label}` }] : []),
+            ...(patient?.abha_id ? [{ v: "abha_contexts", l: "🛡 ABHA" }] : []),
           ].map((t) => (
             <TabsTrigger key={t.v} value={t.v}
               className="text-[13px] rounded-none border-b-2 border-transparent data-[state=active]:border-[#1A2F5A] data-[state=active]:text-[#1A2F5A] data-[state=active]:shadow-none data-[state=active]:bg-transparent px-4 h-full"
@@ -758,6 +764,17 @@ const IPDWorkspace: React.FC<Props> = ({ bed, hospitalId, userId, onRefresh }) =
               {specialty === 'neonatal' && <NeonatalSheet patientId={patient.id} hospitalId={hospitalId} admissionId={admissionId} />}
               {specialty === 'anaesthesia' && <AnaesthesiaSheet patientId={patient.id} hospitalId={hospitalId} admissionId={admissionId} />}
               {specialty === 'ophthalmology' && <OphthalmologySheet patientId={patient.id} hospitalId={hospitalId} />}
+            </TabsContent>
+          )}
+
+          {patient?.abha_id && hospitalId && (
+            <TabsContent value="abha_contexts" className="h-full m-0 overflow-auto p-4">
+              <div className="max-w-2xl">
+                <ABDMCareContextsPanel
+                  patientId={patient.id}
+                  hospitalId={hospitalId}
+                />
+              </div>
             </TabsContent>
           )}
         </div>

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
-import { Building2, ClipboardList, Send, BarChart3, CalendarClock, Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal, TrendingUp, Bell, PieChart } from "lucide-react";
+import { Building2, ClipboardList, Send, BarChart3, CalendarClock, Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal, TrendingUp, Bell, PieChart, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ActiveAdmissions from "@/components/insurance/ActiveAdmissions";
 import PreAuthQueue from "@/components/insurance/PreAuthQueue";
@@ -20,6 +20,7 @@ import EnhancementQueue from "@/components/insurance/EnhancementQueue";
 import IntimationsTab from "@/components/insurance/IntimationsTab";
 import ArogyasriTab from "@/components/insurance/ArogyasriTab";
 import DenialAnalyticsDashboard from "@/components/insurance/DenialAnalyticsDashboard";
+import HCXClaimsTab from "@/components/insurance/HCXClaimsTab";
 
 const ENHANCEMENT_ROLES = ["insurance_executive", "super_admin", "hospital_admin"];
 
@@ -36,11 +37,12 @@ const navGroups = [
   {
     title: "Claim Processing",
     items: [
-      { key: "submit", label: "Claims to Submit", icon: Send, roles: null },
-      { key: "status", label: "Claims Status", icon: BarChart3, roles: null },
-      { key: "queries", label: "TPA Queries", icon: MessageSquare, roles: null },
-      { key: "ageing", label: "TPA Ageing", icon: CalendarClock, roles: null },
-      { key: "unified", label: "Unified View", icon: Layers, roles: null },
+      { key: "submit",    label: "Claims to Submit", icon: Send,        roles: null },
+      { key: "hcx",       label: "HCX Claims",       icon: Zap,         roles: null },
+      { key: "status",    label: "Claims Status",    icon: BarChart3,   roles: null },
+      { key: "queries",   label: "TPA Queries",      icon: MessageSquare, roles: null },
+      { key: "ageing",    label: "TPA Ageing",       icon: CalendarClock, roles: null },
+      { key: "unified",   label: "Unified View",     icon: Layers,      roles: null },
     ]
   },
   {
@@ -76,8 +78,20 @@ const InsurancePage: React.FC = () => {
   const [failedIntimations, setFailedIntimations] = useState(0);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [pendingAdmission, setPendingAdmission] = useState<AdmissionContext | null>(null);
+  const [hcxEnabled, setHcxEnabled] = useState(false);
   const { toast } = useToast();
   const { hospitalId } = useHospitalId();
+
+  useEffect(() => {
+    if (hospitalId) {
+      supabase
+        .from("hospital_abdm_config" as any)
+        .select("feature_hcx_claims")
+        .eq("hospital_id", hospitalId)
+        .maybeSingle()
+        .then(({ data }: { data: any }) => setHcxEnabled(!!(data?.feature_hcx_claims)));
+    }
+  }, [hospitalId]);
 
   useEffect(() => {
     loadKPIs();
@@ -202,6 +216,7 @@ const InsurancePage: React.FC = () => {
       case "auto_settings": return <InsuranceAutomationSettings />;
       case "enhancement_queue": return <EnhancementQueue />;
       case "analytics": return <DenialAnalyticsDashboard />;
+      case "hcx":       return <HCXClaimsTab />;
       default: return null;
     }
   };
@@ -213,6 +228,11 @@ const InsurancePage: React.FC = () => {
           <h1 className="text-base font-bold text-foreground">Insurance & TPA</h1>
         </div>
         <div className="flex items-center gap-3">
+          {hcxEnabled && (
+            <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-violet-100 text-violet-700 font-medium border border-violet-200">
+              <Zap size={11} /> HCX Active
+            </span>
+          )}
           <span className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium">
             Pre-Auth: {kpis.pendingPreAuth} pending
           </span>

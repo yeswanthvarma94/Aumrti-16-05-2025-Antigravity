@@ -42,6 +42,7 @@ ROUTE_ROLES['/quality/committees'] = [
 ROUTE_ROLES['/fms/dashboard'] = [
   'super_admin', 'hospital_admin', 'quality_officer', 'quality_manager',
 ];
+ROUTE_ROLES['/abdm'] = ['super_admin', 'hospital_admin', 'doctor', 'billing_executive'];
 ROUTE_ROLES['/settings/record-retention'] = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/settings/change-log']  = ['super_admin', 'hospital_admin'];
 ROUTE_ROLES['/settings/tv-display']    = ['super_admin', 'hospital_admin', 'receptionist'];

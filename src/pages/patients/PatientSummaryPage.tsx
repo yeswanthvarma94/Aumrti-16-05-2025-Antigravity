@@ -10,6 +10,10 @@ import {
   BedDouble, Heart, AlertTriangle, RefreshCw, Calendar, ClipboardList, ShieldCheck,
 } from "lucide-react";
 import ABHASearchPanel from "@/components/patients/ABHASearchPanel";
+import ABHARegistrationPanel from "@/components/abdm/ABHARegistrationPanel";
+import ABHABadge from "@/components/abdm/ABHABadge";
+import ABDMCareContextsPanel from "@/components/abdm/ABDMCareContextsPanel";
+import ConsentStatusBanner from "@/components/abdm/ConsentStatusBanner";
 import { cn } from "@/lib/utils";
 
 interface DiagnosisHistoryItem {
@@ -150,10 +154,7 @@ const PatientSummaryPage: React.FC = () => {
             <p className="text-sm font-bold">{patient.full_name}</p>
             <Badge variant="secondary" className="text-[10px]">{patient.uhid}</Badge>
             {patient.blood_group && <Badge variant="secondary" className="text-[10px] bg-red-50 text-red-700">{patient.blood_group}</Badge>}
-            {patient.abha_id
-              ? <Badge variant="secondary" className="text-[10px] bg-emerald-50 text-emerald-700 gap-1"><ShieldCheck className="h-3 w-3" />ABHA ✓</Badge>
-              : <Badge variant="secondary" className="text-[10px] bg-slate-100 text-slate-400">No ABHA</Badge>
-            }
+            <ABHABadge abhaNumber={patient.abha_id} size="md" />
           </div>
           <p className="text-xs text-muted-foreground">
             {calcAge(patient.dob)} · {patient.gender || "—"} · {patient.phone || "No phone"}
@@ -172,6 +173,8 @@ const PatientSummaryPage: React.FC = () => {
           <p className="text-xs text-red-700 font-medium">Allergy: {patient.allergy_history}</p>
         </div>
       )}
+
+      <ConsentStatusBanner patientId={patient.id} />
 
       <div className="flex-1 overflow-hidden">
         <Tabs defaultValue="overview" className="flex flex-col h-full">
@@ -343,22 +346,45 @@ const PatientSummaryPage: React.FC = () => {
 
           {/* ABHA tab */}
           <TabsContent value="abha" className="flex-1 overflow-auto p-5 mt-0">
-            <div className="max-w-lg">
-              <div className="flex items-center gap-2 mb-4">
+            <div className="max-w-lg space-y-4">
+              <div className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5 text-emerald-600" />
                 <div>
                   <h3 className="text-sm font-bold">Ayushman Bharat Health Account (ABHA)</h3>
-                  <p className="text-xs text-muted-foreground">Link and manage this patient's ABHA ID for ABDM health record sharing</p>
+                  <p className="text-xs text-muted-foreground">Link or create ABHA for ABDM health record sharing</p>
                 </div>
               </div>
               {patient.hospital_id ? (
-                <ABHASearchPanel
-                  patientId={patient.id}
-                  hospitalId={patient.hospital_id}
-                  existingAbhaId={patient.abha_id}
-                  onLinked={(abhaId) => setPatient((prev) => prev ? { ...prev, abha_id: abhaId } : prev)}
-                  onUnlinked={() => setPatient((prev) => prev ? { ...prev, abha_id: null } : prev)}
-                />
+                patient.abha_id ? (
+                  /* Already linked — show manage panel + care contexts */
+                  <>
+                    <ABHASearchPanel
+                      patientId={patient.id}
+                      hospitalId={patient.hospital_id}
+                      existingAbhaId={patient.abha_id}
+                      onLinked={(abhaId) => setPatient((prev) => prev ? { ...prev, abha_id: abhaId } : prev)}
+                      onUnlinked={() => setPatient((prev) => prev ? { ...prev, abha_id: null } : prev)}
+                    />
+                    <div className="border-t pt-4">
+                      <ABDMCareContextsPanel
+                        patientId={patient.id}
+                        hospitalId={patient.hospital_id}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  /* Not linked — show full creation wizard */
+                  <ABHARegistrationPanel
+                    patientId={patient.id}
+                    patientName={patient.full_name}
+                    patientMobile={patient.phone ?? ""}
+                    onComplete={(abhaNumber, abhaAddress) =>
+                      setPatient((prev) =>
+                        prev ? { ...prev, abha_id: abhaNumber || abhaAddress } : prev,
+                      )
+                    }
+                  />
+                )
               ) : (
                 <p className="text-sm text-muted-foreground">Loading hospital context…</p>
               )}

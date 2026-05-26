@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import EmptyState from "@/components/EmptyState";
 import NABHBadge from "@/components/nabh/NABHBadge";
+import ABHABadge from "@/components/abdm/ABHABadge";
 import WalkInModal from "./WalkInModal";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared";
@@ -307,10 +308,7 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
                       {(token as any).visit_type === "followup" && <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-violet-100 text-violet-700">[F]</span>}
                       {(token as any).visit_type === "emergency" && <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-red-100 text-red-700">[E]</span>}
                       {(token as any).is_mlc && <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-red-600 text-white">MLC</span>}
-                      {token.patient?.abha_id
-                        ? <span className="text-[9px] px-1.5 py-px rounded-full font-bold bg-emerald-100 text-emerald-700">ABHA ✓</span>
-                        : <span className="text-[9px] px-1.5 py-px rounded-full font-medium bg-slate-100 text-slate-400">No ABHA</span>
-                      }
+                      <ABHABadge abhaNumber={token.patient?.abha_id} size="sm" />
                       {(token as any).payer_type && (token as any).payer_type !== "cash" && (
                         <span className={cn(
                           "text-[9px] px-1.5 py-px rounded-full font-bold",

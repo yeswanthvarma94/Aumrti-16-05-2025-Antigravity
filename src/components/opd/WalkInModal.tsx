@@ -5,7 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { X, Search, CheckCircle2, ArrowLeft, CreditCard, Printer, UserPlus, AlertTriangle, ShieldCheck } from "lucide-react";
-import ABHASearchPanel from "@/components/patients/ABHASearchPanel";
+import ABHARegistrationPanel from "@/components/abdm/ABHARegistrationPanel";
 import { autoPostJournalEntry } from "@/lib/accounting";
 import { generateBillNumber } from "@/hooks/useBillNumber";
 import { logAudit } from "@/lib/auditLog";
@@ -742,24 +742,24 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
                       {!foundPatient.abha_id && (
                         <button
                           onClick={() => setShowAbhaLink(!showAbhaLink)}
-                          className="text-[11px] text-blue-600 hover:underline font-medium"
+                          className="text-[11px] text-blue-600 hover:underline font-medium flex items-center gap-1"
                         >
-                          {showAbhaLink ? "Hide ABHA" : "+ Link ABHA ID"}
+                          {showAbhaLink ? "Hide ABHA" : "+ Link / Create ABHA"}
                         </button>
                       )}
                     </div>
                   </div>
                   {showAbhaLink && !foundPatient.abha_id && (
-                    <div className="p-3 border border-blue-200 rounded-lg bg-blue-50/50">
-                      <p className="text-xs font-semibold text-blue-800 mb-2">Link ABHA ID</p>
-                      <ABHASearchPanel
+                    <div className="p-3 border border-blue-200 rounded-lg bg-blue-50/30">
+                      <ABHARegistrationPanel
                         patientId={foundPatient.id}
-                        hospitalId={hospitalId}
-                        existingAbhaId={foundPatient.abha_id}
-                        onLinked={(abhaId) => {
-                          setFoundPatient((prev) => prev ? { ...prev, abha_id: abhaId } : prev);
+                        patientName={foundPatient.full_name}
+                        patientMobile={foundPatient.phone || ""}
+                        onComplete={(abhaNumber) => {
+                          setFoundPatient((prev) => prev ? { ...prev, abha_id: abhaNumber } : prev);
                           setShowAbhaLink(false);
                         }}
+                        onSkip={() => setShowAbhaLink(false)}
                       />
                     </div>
                   )}

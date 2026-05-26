@@ -137,6 +137,7 @@ const SettingsAILanguagePage = lazy(() => import("./pages/settings/SettingsAILan
 const SettingsInventoryPage = lazy(() => import("./pages/settings/SettingsInventoryPage"));
 const IntegrationsHubPage = lazy(() => import("./pages/settings/IntegrationsHubPage"));
 const SettingsProductModePage = lazy(() => import("./pages/settings/SettingsProductModePage"));
+const ABDMConsentPage = lazy(() => import("./pages/ABDMConsentPage"));
 const ForecastsPage = lazy(() => import("./pages/analytics/ForecastsPage"));
 const PatientJoinPage        = lazy(() => import("./pages/teleconsult/PatientJoinPage"));
 const DoctorTeleconsultPage  = lazy(() => import("./pages/teleconsult/DoctorTeleconsultPage"));
@@ -304,6 +305,7 @@ const App = () => (
             <Route path="/settings/inventory" element={<RG path="/settings"><SM name="Inventory Settings"><SettingsInventoryPage /></SM></RG>} />
             <Route path="/settings/gst" element={<RG path="/settings"><SM name="GST"><SettingsGSTPage /></SM></RG>} />
             <Route path="/settings/abdm" element={<RG path="/settings"><SM name="ABDM"><SettingsABDMPage /></SM></RG>} />
+            <Route path="/abdm" element={<RG path="/abdm"><SM name="ABDM Consent Manager"><ABDMConsentPage /></SM></RG>} />
             <Route path="/settings/backup" element={<RG path="/settings"><SM name="Backup & Export"><SettingsBackupPage /></SM></RG>} />
             <Route path="/settings/record-retention" element={<RG path="/settings"><SM name="Record Retention"><SettingsRecordRetentionPage /></SM></RG>} />
             <Route path="/ims/access-logs" element={<RG path="/settings"><SM name="IMS Access Logs"><IMSAccessLogsPage /></SM></RG>} />

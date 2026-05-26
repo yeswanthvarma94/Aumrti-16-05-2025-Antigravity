@@ -244,9 +244,9 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
       return;
     }
 
-    // Get bed for housekeeping
+    // Get bed for housekeeping + patient_id for ABHA linking
     const { data: adm } = await supabase.from("admissions")
-      .select("bed_id, ward_id").eq("id", admissionId).maybeSingle();
+      .select("bed_id, ward_id, patient_id").eq("id", admissionId).maybeSingle();
 
     if (adm?.bed_id) {
       await supabase.from("beds").update({ status: "cleaning" as any }).eq("id", adm.bed_id);
@@ -280,6 +280,18 @@ Use formal medical language. Keep factual. Do not invent details not provided. M
     setSigned(true);
     setSigning(false);
     logAudit({ action: "updated", module: "ipd", entityType: "admission", entityId: admissionId, details: { action: "discharged" } });
+
+    // Fire-and-forget ABHA care context linking (non-blocking)
+    if (adm?.patient_id) {
+      supabase.functions.invoke("abdm-auto-link-care-context", {
+        body: {
+          hospital_id: hospitalId,
+          patient_id: adm.patient_id,
+          event_type: "ipd_discharged",
+          source_id: admissionId,
+        },
+      }).catch(() => {});
+    }
 
     // WhatsApp discharge summary (non-blocking)
     try {

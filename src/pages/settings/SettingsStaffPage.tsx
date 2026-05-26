@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useHospitalId } from "@/hooks/useHospitalId";
 import {
   ArrowLeft, Plus, X, Users, Stethoscope, HeartPulse,
-  Receipt, Pill, TestTube, ClipboardList, Shield, Wrench, Trash2,
+  Receipt, Pill, TestTube, ClipboardList, Shield, Wrench, Trash2, ShieldCheck,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ interface StaffForm {
   pan_number: string;
   esi_ip_number: string;
   license_expiry_date: string;
+  hpr_id: string;
   // Doctor pricing
   consultation_fee: string;
   follow_up_fee: string;
@@ -48,6 +50,7 @@ const EMPTY_FORM: StaffForm = {
   employee_id: "", employment_type: "permanent", basic_salary: "",
   hra_percent: "20", da_percent: "10", conveyance: "1600", medical_allowance: "1250",
   pf_applicable: true, esic_applicable: false, uan_number: "", pan_number: "", esi_ip_number: "", license_expiry_date: "",
+  hpr_id: "",
   consultation_fee: "", follow_up_fee: "", validity_days: "7",
 };
 
@@ -111,13 +114,20 @@ const SettingsStaffPage: React.FC = () => {
   const [creatingLogin, setCreatingLogin] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"profile" | "privileges">("profile");
 
+  // HPR verification state (per-open-drawer)
+  const [hprVerifying, setHprVerifying] = useState(false);
+  const [hprResult, setHprResult] = useState<{ name: string; speciality: string; qualification: string; council: string } | null>(null);
+  const [hprError, setHprError] = useState<string | null>(null);
+
+  const { hospitalId } = useHospitalId();
+
   /* ─── Queries ─── */
   const { data: users, isLoading } = useQuery({
     queryKey: ["settings-staff"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("users")
-        .select("id, full_name, email, phone, role, is_active, registration_number, department_id, auth_user_id, can_login")
+        .select("id, full_name, email, phone, role, is_active, registration_number, department_id, auth_user_id, can_login, hpr_id, hpr_verified_at")
         .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
@@ -250,7 +260,8 @@ const SettingsStaffPage: React.FC = () => {
           role: form.role as any,
           department_id: deptId,
           registration_number: form.registration_number || null,
-        }).eq("id", editingId);
+          hpr_id: form.hpr_id || null,
+        } as any).eq("id", editingId);
         if (error) throw error;
 
         // Upsert staff_profiles with salary data
@@ -269,6 +280,7 @@ const SettingsStaffPage: React.FC = () => {
           role: form.role as any,
           department_id: deptId,
           registration_number: form.registration_number || null,
+          hpr_id: form.hpr_id || null,
           is_active: true,
           can_login: false,
           auth_user_id: null,
@@ -496,6 +508,7 @@ const SettingsStaffPage: React.FC = () => {
       setForm({
         full_name: user.full_name, phone: user.phone ?? "", email: user.email,
         role: user.role, department_id: user.department_id ?? "", registration_number: user.registration_number ?? "", ward_id: "",
+        hpr_id: (user as any).hpr_id ?? "",
         employee_id: profile?.employee_id ?? "",
         employment_type: profile?.employment_type ?? "permanent",
         basic_salary: profile?.basic_salary?.toString() ?? "",
@@ -517,10 +530,12 @@ const SettingsStaffPage: React.FC = () => {
       setEditingId(null);
       setForm({ ...EMPTY_FORM });
     }
+    setHprResult(null);
+    setHprError(null);
     setDrawerOpen(true);
   };
 
-  const closeDrawer = () => { setDrawerOpen(false); setEditingId(null); setForm({ ...EMPTY_FORM }); setDrawerTab("profile"); };
+  const closeDrawer = () => { setDrawerOpen(false); setEditingId(null); setForm({ ...EMPTY_FORM }); setDrawerTab("profile"); setHprResult(null); setHprError(null); };
 
   const initials = (name: string) => name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 
@@ -608,7 +623,14 @@ const SettingsStaffPage: React.FC = () => {
                           {initials(u.full_name)}
                         </div>
                         <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-foreground truncate">{u.full_name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-[13px] font-medium text-foreground truncate">{u.full_name}</p>
+                            {(u as any).hpr_verified_at && (
+                              <span title="HPR Verified" className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium shrink-0">
+                                <ShieldCheck size={9} /> HPR
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[11px] text-muted-foreground truncate">{u.email}</p>
                         </div>
                       </div>
@@ -764,10 +786,50 @@ const SettingsStaffPage: React.FC = () => {
                   </select>
                 </div>
                 {form.role === "doctor" && (
-                  <div>
-                    <label className="text-[14px] font-medium text-muted-foreground mb-1 block">Registration No (MCI/NMC)</label>
-                    <Input value={form.registration_number} onChange={(e) => setForm({ ...form, registration_number: e.target.value })} placeholder="MH-12345" className="h-10" />
-                  </div>
+                  <>
+                    <div>
+                      <label className="text-[14px] font-medium text-muted-foreground mb-1 block">Registration No (MCI/NMC)</label>
+                      <Input value={form.registration_number} onChange={(e) => setForm({ ...form, registration_number: e.target.value })} placeholder="MH-12345" className="h-10" />
+                    </div>
+                    <div>
+                      <label className="text-[14px] font-medium text-muted-foreground mb-1 block">HPR ID (Healthcare Professionals Registry)</label>
+                      <div className="flex gap-2">
+                        <Input value={form.hpr_id} onChange={(e) => { setForm({ ...form, hpr_id: e.target.value }); setHprResult(null); setHprError(null); }} placeholder="e.g. 12345678901234" className="h-10 flex-1" />
+                        <button
+                          type="button"
+                          disabled={hprVerifying || !form.hpr_id?.trim()}
+                          className="inline-flex items-center gap-1.5 h-10 px-3 rounded-md border border-input bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          onClick={async () => {
+                            if (!form.hpr_id?.trim()) return;
+                            setHprVerifying(true); setHprResult(null); setHprError(null);
+                            const { data, error } = await supabase.functions.invoke("abdm-hpr-verify", {
+                              body: { hpr_id: form.hpr_id.trim(), hospital_id: hospitalId ?? undefined, user_id: editingId ?? undefined },
+                            });
+                            setHprVerifying(false);
+                            if (error || !data?.success) { setHprError(data?.error ?? error?.message ?? "Verification failed"); return; }
+                            setHprResult(data.doctor);
+                            if (editingId) qc.invalidateQueries({ queryKey: ["settings-staff"] });
+                          }}
+                        >
+                          <ShieldCheck className="h-4 w-4 text-blue-600" />
+                          {hprVerifying ? "Verifying…" : "Verify HPR"}
+                        </button>
+                      </div>
+                      {hprResult && (
+                        <div className="mt-1.5 flex items-start gap-1.5 text-[12px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2.5 py-1.5">
+                          <ShieldCheck className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          <span><strong>HPR Verified:</strong> {hprResult.name}{hprResult.speciality ? ` · ${hprResult.speciality}` : ""}{hprResult.qualification ? ` · ${hprResult.qualification}` : ""}</span>
+                        </div>
+                      )}
+                      {hprError && (
+                        <p className="mt-1 text-[12px] text-red-600">{hprError}</p>
+                      )}
+                      {!hprResult && !hprError && editingId && (users?.find(u => u.id === editingId) as any)?.hpr_verified_at && (
+                        <p className="text-[11px] text-emerald-600 mt-1">Verified on {new Date((users?.find(u => u.id === editingId) as any).hpr_verified_at).toLocaleDateString()}</p>
+                      )}
+                      <p className="text-[11px] text-muted-foreground mt-1">Issued by the National Health Authority HPR registry.</p>
+                    </div>
+                  </>
                 )}
               </div>
 

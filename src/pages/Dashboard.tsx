@@ -32,6 +32,7 @@ import ChronicFollowupsStatCard from "@/components/dashboard/ChronicFollowupsSta
 import NABHReadinessCard from "@/components/dashboard/NABHReadinessCard";
 import OverdueCAPABanner from "@/components/safety/OverdueCAPABanner";
 import NABHQIAlertCard from "@/components/dashboard/NABHQIAlertCard";
+import ABDMComplianceCard from "@/components/dashboard/ABDMComplianceCard";
 
 function formatRevenue(amount: number): string {
   if (amount >= 10000000) return "₹" + (amount / 10000000).toFixed(1) + "Cr";
@@ -412,6 +413,11 @@ const Dashboard: React.FC = () => {
             {/* Card 8 - NABH Readiness */}
             {hasAccess("/nabh/compliance", role, permissions) && (
               <NABHReadinessCard hospitalId={hospitalId} />
+            )}
+
+            {/* Card 9 - ABDM Compliance */}
+            {hasAccess("/abdm", role, permissions) && hospitalId && (
+              <ABDMComplianceCard hospitalId={hospitalId} />
             )}
           </div>
 

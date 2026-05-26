@@ -433,6 +433,18 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
       validation_notes: validationNotes || null,
     } as any).eq("id", order.id);
 
+    // Fire-and-forget ABHA care context linking (non-blocking)
+    if (labHospitalId && order.patient_id) {
+      supabase.functions.invoke("abdm-auto-link-care-context", {
+        body: {
+          hospital_id: labHospitalId,
+          patient_id: order.patient_id,
+          event_type: "lab_reported",
+          source_id: order.id,
+        },
+      }).catch(() => {});
+    }
+
     setValidating(false);
     fetchItems();
     onRefresh();

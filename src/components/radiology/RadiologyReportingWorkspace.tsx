@@ -282,6 +282,18 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
       indication,
     }).eq("id", order.id);
 
+    // Fire-and-forget ABHA care context linking (non-blocking)
+    if (order.patient_id) {
+      supabase.functions.invoke("abdm-auto-link-care-context", {
+        body: {
+          hospital_id: hospitalId,
+          patient_id: order.patient_id,
+          event_type: "radiology_reported",
+          source_id: order.id,
+        },
+      }).catch(() => {});
+    }
+
     // Critical alert
     if (isCritical && criticalFinding.trim()) {
       await supabase.from("clinical_alerts").insert({

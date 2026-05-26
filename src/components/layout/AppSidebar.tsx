@@ -45,6 +45,7 @@ const recordsItems: SidebarItem[] = [
   { label: "Medical Records", path: "/mrd",          icon: FolderOpen,  moduleKey: "mrd" },
   { label: "IPC Dashboard",   path: "/ipc/dashboard",icon: ShieldCheck, moduleKey: "ipc" },
   { label: "FMS / Safety",    path: "/fms/dashboard",icon: Wrench,      moduleKey: "fms" },
+  { label: "ABDM / ABHA",     path: "/abdm",         icon: ShieldCheck },
 ];
 
 const bottomItems: SidebarItem[] = [
@@ -66,6 +67,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
   const { expiringCount } = useCredentialAlert();
   const [userName, setUserName] = useState("User");
   const [userInitials, setUserInitials] = useState("U");
+  const [pendingConsentCount, setPendingConsentCount] = useState(0);
 
   const { isModuleEnabled } = useProductMode();
   const isCollapsed = isMobileOverlay ? false : collapsed;
@@ -75,6 +77,17 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
       hasAccess(item.path, role, permissions) &&
       (!item.moduleKey || isModuleEnabled(item.moduleKey))
     );
+
+  useEffect(() => {
+    if (hospitalId) {
+      supabase
+        .from("abdm_consents")
+        .select("id", { count: "exact", head: true })
+        .eq("hospital_id", hospitalId)
+        .eq("status", "REQUESTED")
+        .then(({ count }) => setPendingConsentCount(count ?? 0));
+    }
+  }, [hospitalId]);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -105,7 +118,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({ isMobileOverlay, onClose }) => 
     const Icon = item.icon;
     const active = location.pathname === item.path;
     const isModules = item.path === "/modules";
-    const badge = item.path === "/hr" ? expiringCount : 0;
+    const badge = item.path === "/hr" ? expiringCount : item.path === "/abdm" ? pendingConsentCount : 0;
 
     return (
       <button

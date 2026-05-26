@@ -606,6 +606,22 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
       consultation_end_at: new Date().toISOString(),
     }).eq("id", token.id);
 
+    // Fire-and-forget ABHA care context linking (non-blocking)
+    if (encounterId && hospitalId) {
+      supabase.functions.invoke("abdm-auto-link-care-context", {
+        body: {
+          hospital_id: hospitalId,
+          patient_id: token.patient_id,
+          event_type: "opd_completed",
+          source_id: encounterId,
+        },
+      }).then(() => {
+        if (token.patient?.abha_id) {
+          toast({ title: "ABHA record linking initiated" });
+        }
+      }).catch(() => {});
+    }
+
     // Link OPD bill to encounter_id (bill was created at walk-in without encounter)
     if (encounterId && hospitalId) {
       const today = new Date().toISOString().split("T")[0];
