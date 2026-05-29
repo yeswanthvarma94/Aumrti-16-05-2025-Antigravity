@@ -4,6 +4,7 @@ import { Plus, Clock, ChevronDown, ChevronUp, ScanLine, BookOpen } from "lucide-
 import { useNavigate } from "react-router-dom";
 import EmptyState from "@/components/EmptyState";
 import type { RadiologyOrder, Modality } from "@/pages/radiology/RadiologyPage";
+import NABHBadge from "@/components/nabh/NABHBadge";
 
 interface PendingOpdRadOrder {
   prescriptionId: string;

@@ -7,6 +7,7 @@ import IPDWorkspace from "@/components/ipd/IPDWorkspace";
 import WardStats from "@/components/ipd/WardStats";
 import AdmitPatientModal from "@/components/ipd/AdmitPatientModal";
 import BedForecastCard from "@/components/ipd/BedForecastCard";
+import { useHospitalContext } from "@/contexts/HospitalContext";
 
 export interface BedData {
   id: string;
@@ -47,8 +48,7 @@ export interface AdmissionRow {
 }
 
 const IPDPage: React.FC = () => {
-  const [hospitalId, setHospitalId] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
+  const { hospitalId, userId } = useHospitalContext();
   const [beds, setBeds] = useState<BedData[]>([]);
   const [admissions, setAdmissions] = useState<AdmissionRow[]>([]);
   const [selectedBedId, setSelectedBedId] = useState<string | null>(null);
@@ -57,24 +57,19 @@ const IPDPage: React.FC = () => {
   const [showWardStats, setShowWardStats] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setLoading(false); return; }
-    const { data: ud, error: udErr } = await supabase.from("users").select("id, hospital_id").eq("auth_user_id", user.id).maybeSingle();
-    if (udErr || !ud) { console.error("IPD user fetch error:", udErr?.message); setLoading(false); return; }
-    setHospitalId(ud.hospital_id);
-    setUserId(ud.id);
+    if (!hospitalId) return;
 
     const [{ data: bedData, error: bedErr }, { data: admData, error: admErr }] = await Promise.all([
       supabase
         .from("beds")
         .select("id, bed_number, status, ward_id, ward:wards(name)")
-        .eq("hospital_id", ud.hospital_id)
+        .eq("hospital_id", hospitalId)
         .eq("is_active", true)
         .order("bed_number"),
       supabase
         .from("admissions")
         .select("id, patient_id, bed_id, ward_id, admission_type, admission_number, admitting_diagnosis, admitted_at, expected_discharge_date, admitting_doctor_id, status, is_mlc, mlc_number, payer_type, patient:patients(full_name, abha_id), bed:beds(bed_number), ward:wards(name), doctor:users!admissions_admitting_doctor_id_fkey(full_name)")
-        .eq("hospital_id", ud.hospital_id)
+        .eq("hospital_id", hospitalId)
         .eq("status", "active")
         .order("admitted_at", { ascending: false }),
     ]);
@@ -157,7 +152,7 @@ const IPDPage: React.FC = () => {
     setBeds(mappedBeds);
     setAdmissions(admRows);
     setLoading(false);
-  }, []);
+  }, [hospitalId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

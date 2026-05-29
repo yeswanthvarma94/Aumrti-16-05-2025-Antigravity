@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 interface HospitalContextValue {
   hospitalId: string | null;
+  userId: string | null;
   role: string | null;
   permissions: Record<string, any> | null;
   fullName: string | null;
@@ -11,6 +12,7 @@ interface HospitalContextValue {
 
 const HospitalContext = createContext<HospitalContextValue>({
   hospitalId: null,
+  userId: null,
   role: null,
   permissions: null,
   fullName: null,
@@ -51,6 +53,7 @@ function clearCache() {
 
 export const HospitalProvider = ({ children }: { children: React.ReactNode }) => {
   const [hospitalId, setHospitalId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<Record<string, any> | null>(null);
   const [fullName, setFullName] = useState<string | null>(null);
@@ -86,6 +89,7 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
         const cached = readCache(user.id);
         if (cached) {
           setHospitalId(cached.hospitalId);
+          setUserId(cached.userId ?? null);
           setRole(cached.role);
           setPermissions(cached.permissions);
           setFullName(cached.fullName);
@@ -103,11 +107,11 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
       }
     };
 
-    const fetchAndApply = async (userId: string) => {
+    const fetchAndApply = async (authUserId: string) => {
       const { data: userData, error: userError } = await supabase
         .from("users")
-        .select("hospital_id, role, full_name")
-        .eq("auth_user_id", userId)
+        .select("id, hospital_id, role, full_name")
+        .eq("auth_user_id", authUserId)
         .maybeSingle();
 
       if (userError) {
@@ -122,6 +126,7 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
       }
 
       setHospitalId(userData.hospital_id);
+      setUserId((userData as any).id ?? null);
       setRole(userData.role);
       setFullName((userData as any).full_name ?? null);
 
@@ -141,8 +146,9 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
       resolvedRef.current = true;
       setLoading(false);
 
-      writeCache(userId, {
+      writeCache(authUserId, {
         hospitalId: userData.hospital_id,
+        userId: (userData as any).id ?? null,
         role: userData.role,
         permissions: perms,
         fullName: (userData as any).full_name ?? null,
@@ -151,12 +157,12 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
     };
 
     // Silently re-fetches from Supabase without touching loading state.
-    const refreshInBackground = async (userId: string) => {
+    const refreshInBackground = async (authUserId: string) => {
       try {
         const { data: userData } = await supabase
           .from("users")
-          .select("hospital_id, role, full_name")
-          .eq("auth_user_id", userId)
+          .select("id, hospital_id, role, full_name")
+          .eq("auth_user_id", authUserId)
           .maybeSingle();
 
         if (!userData) return;
@@ -171,12 +177,14 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
         const perms = (permsData?.permissions as Record<string, any>) || null;
 
         setHospitalId(userData.hospital_id);
+        setUserId((userData as any).id ?? null);
         setRole(userData.role);
         setFullName((userData as any).full_name ?? null);
         setPermissions(perms);
 
-        writeCache(userId, {
+        writeCache(authUserId, {
           hospitalId: userData.hospital_id,
+          userId: (userData as any).id ?? null,
           role: userData.role,
           permissions: perms,
           fullName: (userData as any).full_name ?? null,
@@ -198,6 +206,7 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
         resolvedRef.current = false;
         clearCache();
         setHospitalId(null);
+        setUserId(null);
         setRole(null);
         setPermissions(null);
         setFullName(null);
@@ -214,8 +223,8 @@ export const HospitalProvider = ({ children }: { children: React.ReactNode }) =>
   }, []);
 
   const value = React.useMemo(
-    () => ({ hospitalId, role, permissions, fullName, loading }),
-    [hospitalId, role, permissions, fullName, loading]
+    () => ({ hospitalId, userId, role, permissions, fullName, loading }),
+    [hospitalId, userId, role, permissions, fullName, loading]
   );
 
   return (

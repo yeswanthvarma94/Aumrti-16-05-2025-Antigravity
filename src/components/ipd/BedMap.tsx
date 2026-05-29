@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Plus } from "lucide-react";
 import type { BedData } from "@/pages/ipd/IPDPage";
+import NABHBadge from "@/components/nabh/NABHBadge";
 
 interface Props {
   beds: BedData[];

@@ -16,7 +16,7 @@ interface ManualDoc {
 
 interface Props {
   hospitalId: string;
-  onComplete: () => void;
+  onComplete: (doctors: Array<{ id: string; name: string }>) => void;
 }
 
 const Step4Doctors: React.FC<Props> = ({ hospitalId, onComplete }) => {
@@ -69,7 +69,7 @@ const Step4Doctors: React.FC<Props> = ({ hospitalId, onComplete }) => {
 
   const handleSaveManual = async () => {
     const valid = doctors.filter((d) => d.name.trim());
-    if (valid.length === 0) { onComplete(); return; }
+    if (valid.length === 0) { onComplete([]); return; }
     setSaving(true);
     const rows = valid.map((d) => ({
       id: crypto.randomUUID(),
@@ -84,28 +84,29 @@ const Step4Doctors: React.FC<Props> = ({ hospitalId, onComplete }) => {
     const { error } = await supabase.from("users").insert(rows as any);
     if (error) {
       toast({ title: "Error adding doctors", description: error.message, variant: "destructive" });
-    } else {
-      // Create service_master rows for doctors with fees
-      const svcRows = valid
-        .map((v, i) => ({ ...v, doctorId: rows[i].id }))
-        .filter((v) => v.fee && parseFloat(v.fee) > 0)
-        .map((v) => ({
-          hospital_id: hospitalId,
-          name: `Consultation - ${v.name}`,
-          category: "consultation",
-          item_type: "consultation",
-          doctor_id: v.doctorId,
-          fee: parseFloat(v.fee) || 500,
-          follow_up_fee: v.followUpFee ? parseFloat(v.followUpFee) : 200,
-          validity_days: 7,
-          is_active: true,
-        }));
-      if (svcRows.length > 0) {
-        await (supabase as any).from("service_master").insert(svcRows);
-      }
+      setSaving(false);
+      return;
+    }
+    // Create service_master rows for doctors with fees
+    const svcRows = valid
+      .map((v, i) => ({ ...v, doctorId: rows[i].id }))
+      .filter((v) => v.fee && parseFloat(v.fee) > 0)
+      .map((v) => ({
+        hospital_id: hospitalId,
+        name: `Consultation - ${v.name}`,
+        category: "consultation",
+        item_type: "consultation",
+        doctor_id: v.doctorId,
+        fee: parseFloat(v.fee) || 500,
+        follow_up_fee: v.followUpFee ? parseFloat(v.followUpFee) : 200,
+        validity_days: 7,
+        is_active: true,
+      }));
+    if (svcRows.length > 0) {
+      await (supabase as any).from("service_master").insert(svcRows);
     }
     setSaving(false);
-    onComplete();
+    onComplete(rows.map((r) => ({ id: r.id, name: r.full_name })));
   };
 
   return (
@@ -176,7 +177,7 @@ const Step4Doctors: React.FC<Props> = ({ hospitalId, onComplete }) => {
       </Tabs>
 
       <div className="flex justify-between mt-8">
-        <button onClick={onComplete} className="text-sm text-muted-foreground hover:text-foreground">I'll add doctors later →</button>
+        <button onClick={() => onComplete([])} className="text-sm text-muted-foreground hover:text-foreground">I'll add doctors later →</button>
         <button onClick={handleSaveManual} disabled={saving} className="bg-primary text-primary-foreground px-7 py-2.5 rounded-lg text-sm font-semibold hover:bg-[hsl(220,54%,16%)] transition-colors disabled:opacity-40 active:scale-[0.97]">
           {saving ? "Saving..." : "Save & Continue →"}
         </button>

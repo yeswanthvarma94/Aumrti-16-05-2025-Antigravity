@@ -6,21 +6,42 @@ import { Check, ArrowLeft } from "lucide-react";
 import Step1Branding from "./steps/Step1Branding";
 import Step2Departments from "./steps/Step2Departments";
 import Step3Wards from "./steps/Step3Wards";
+import Step4bShifts from "./steps/Step4bShifts";
 import Step4Doctors from "./steps/Step4Doctors";
+import Step5bStaff from "./steps/Step5bStaff";
+import Step5cSchedules from "./steps/Step5cSchedules";
 import Step5Fees from "./steps/Step5Fees";
+import Step6bPayers from "./steps/Step6bPayers";
+import Step6cLabRadiology from "./steps/Step6cLabRadiology";
 import Step6Payments from "./steps/Step6Payments";
 import Step7WhatsApp from "./steps/Step7WhatsApp";
+import Step7bModules from "./steps/Step7bModules";
 import Step8GoLive from "./steps/Step8GoLive";
 
-const stepNames = [
-  "Branding",
-  "Departments",
-  "Wards",
-  "Doctors",
-  "Fees",
-  "Payments",
-  "WhatsApp",
-  "Go Live",
+const STEPS = [
+  { label: "Branding",       section: "Hospital",      optional: true  },
+  { label: "Departments",    section: "Hospital",      optional: false },
+  { label: "Wards & Beds",   section: "Structure",     optional: false },
+  { label: "Shifts",         section: "Structure",     optional: false },
+  { label: "Doctors",        section: "People",        optional: true  },
+  { label: "Other Staff",    section: "People",        optional: true  },
+  { label: "OPD Schedules",  section: "People",        optional: true  },
+  { label: "Fees",           section: "Services",      optional: false },
+  { label: "Payers",         section: "Services",      optional: true  },
+  { label: "Lab & Radiology", section: "Services",     optional: true  },
+  { label: "Payments",       section: "Services",      optional: false },
+  { label: "WhatsApp",       section: "Integrations",  optional: true  },
+  { label: "Modules",        section: "Integrations",  optional: true  },
+  { label: "Go Live",        section: "Launch",        optional: false },
+] as const;
+
+const SECTIONS = [
+  { label: "Hospital",      indices: [0, 1] },
+  { label: "Structure",     indices: [2, 3] },
+  { label: "People",        indices: [4, 5, 6] },
+  { label: "Services",      indices: [7, 8, 9, 10] },
+  { label: "Integrations",  indices: [11, 12] },
+  { label: "Launch",        indices: [13] },
 ];
 
 const OnboardingWizard: React.FC = () => {
@@ -31,8 +52,8 @@ const OnboardingWizard: React.FC = () => {
   const [hospitalId, setHospitalId] = useState<string | null>(null);
   const [hospitalName, setHospitalName] = useState("");
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
-  // Shared state for cross-step data
   const [selectedDepts, setSelectedDepts] = useState<string[]>([]);
+  const [addedDoctors, setAddedDoctors] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     const init = async () => {
@@ -65,7 +86,7 @@ const OnboardingWizard: React.FC = () => {
 
   const markComplete = (s: number) => {
     setCompletedSteps((prev) => new Set([...prev, s]));
-    if (s < 7) setStep(s + 1);
+    if (s < 13) setStep(s + 1);
   };
 
   const handleSkipSetup = async () => {
@@ -98,30 +119,44 @@ const OnboardingWizard: React.FC = () => {
           <span className="text-base font-bold text-primary">Hospital Setup</span>
         </div>
 
-        {/* Progress dots */}
-        <div className="flex-1 flex items-center justify-center gap-1">
-          {stepNames.map((name, i) => {
-            const done = completedSteps.has(i);
-            const active = i === step;
-            return (
-              <React.Fragment key={name}>
-                {i > 0 && <div className="w-4 h-px bg-border hidden sm:block" />}
-                <div className="flex flex-col items-center gap-1">
-                  <button
-                    onClick={() => (done || i <= step) && setStep(i)}
-                    className={`w-2.5 h-2.5 rounded-full transition-colors ${
-                      done ? "bg-[hsl(160,84%,39%)]" : active ? "bg-primary" : "bg-border"
-                    }`}
-                  />
-                  <span className="text-[10px] text-muted-foreground hidden lg:block">{name}</span>
+        {/* Section-grouped progress bar */}
+        <div className="flex-1 flex items-center justify-center gap-0 overflow-x-auto">
+          {SECTIONS.map((section, si) => (
+            <React.Fragment key={section.label}>
+              {si > 0 && <div className="w-px h-4 bg-border mx-2 shrink-0 hidden sm:block" />}
+              <div className="flex flex-col items-center gap-1 shrink-0">
+                <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide hidden lg:block">
+                  {section.label}
+                </span>
+                <div className="flex items-center gap-1">
+                  {section.indices.map((i) => {
+                    const done = completedSteps.has(i);
+                    const active = i === step;
+                    return (
+                      <React.Fragment key={i}>
+                        <div className="flex flex-col items-center gap-0.5">
+                          <button
+                            onClick={() => (done || i <= step) && setStep(i)}
+                            title={STEPS[i].label}
+                            className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                              done ? "bg-[hsl(160,84%,39%)]" : active ? "bg-primary" : "bg-border"
+                            }`}
+                          />
+                          <span className="text-[9px] text-muted-foreground hidden xl:block leading-none">
+                            {STEPS[i].label}
+                          </span>
+                        </div>
+                      </React.Fragment>
+                    );
+                  })}
                 </div>
-              </React.Fragment>
-            );
-          })}
+              </div>
+            </React.Fragment>
+          ))}
         </div>
 
         <div className="flex items-center gap-3 min-w-[160px] justify-end">
-          <span className="text-[13px] text-muted-foreground">Step {step + 1} of 8</span>
+          <span className="text-[13px] text-muted-foreground">Step {step + 1} of 14</span>
           <button
             onClick={handleSkipSetup}
             className="text-[12px] text-muted-foreground hover:text-foreground underline"
@@ -134,14 +169,20 @@ const OnboardingWizard: React.FC = () => {
       {/* Content */}
       <div className="flex-1 overflow-y-auto flex justify-center">
         <div className="w-full max-w-[720px] px-6 py-10">
-          {step === 0 && <Step1Branding hospitalId={hospitalId!} hospitalName={hospitalName} onComplete={() => markComplete(0)} />}
-          {step === 1 && <Step2Departments hospitalId={hospitalId!} onComplete={(depts) => { setSelectedDepts(depts); markComplete(1); }} />}
-          {step === 2 && <Step3Wards hospitalId={hospitalId!} onComplete={() => markComplete(2)} />}
-          {step === 3 && <Step4Doctors hospitalId={hospitalId!} onComplete={() => markComplete(3)} />}
-          {step === 4 && <Step5Fees hospitalId={hospitalId!} selectedDepts={selectedDepts} onComplete={() => markComplete(4)} />}
-          {step === 5 && <Step6Payments hospitalId={hospitalId!} onComplete={() => markComplete(5)} />}
-          {step === 6 && <Step7WhatsApp hospitalId={hospitalId!} hospitalName={hospitalName} onComplete={() => markComplete(6)} />}
-          {step === 7 && <Step8GoLive hospitalId={hospitalId!} hospitalName={hospitalName} completedSteps={completedSteps} selectedDepts={selectedDepts} onGoLive={handleGoLive} />}
+          {step === 0  && <Step1Branding     hospitalId={hospitalId!} hospitalName={hospitalName} onComplete={() => markComplete(0)} />}
+          {step === 1  && <Step2Departments  hospitalId={hospitalId!} onComplete={(depts) => { setSelectedDepts(depts); markComplete(1); }} />}
+          {step === 2  && <Step3Wards        hospitalId={hospitalId!} onComplete={() => markComplete(2)} />}
+          {step === 3  && <Step4bShifts      hospitalId={hospitalId!} onComplete={() => markComplete(3)} onSkip={() => markComplete(3)} />}
+          {step === 4  && <Step4Doctors      hospitalId={hospitalId!} onComplete={(docs) => { setAddedDoctors(docs); markComplete(4); }} />}
+          {step === 5  && <Step5bStaff       hospitalId={hospitalId!} onComplete={() => markComplete(5)} onSkip={() => markComplete(5)} />}
+          {step === 6  && <Step5cSchedules   hospitalId={hospitalId!} doctors={addedDoctors} onComplete={() => markComplete(6)} onSkip={() => markComplete(6)} />}
+          {step === 7  && <Step5Fees         hospitalId={hospitalId!} selectedDepts={selectedDepts} onComplete={() => markComplete(7)} />}
+          {step === 8  && <Step6bPayers      hospitalId={hospitalId!} onComplete={() => markComplete(8)} onSkip={() => markComplete(8)} />}
+          {step === 9  && <Step6cLabRadiology hospitalId={hospitalId!} onComplete={() => markComplete(9)} onSkip={() => markComplete(9)} />}
+          {step === 10 && <Step6Payments     hospitalId={hospitalId!} onComplete={() => markComplete(10)} />}
+          {step === 11 && <Step7WhatsApp     hospitalId={hospitalId!} hospitalName={hospitalName} onComplete={() => markComplete(11)} />}
+          {step === 12 && <Step7bModules     hospitalId={hospitalId!} onComplete={() => markComplete(12)} onSkip={() => markComplete(12)} />}
+          {step === 13 && <Step8GoLive       hospitalId={hospitalId!} hospitalName={hospitalName} completedSteps={completedSteps} selectedDepts={selectedDepts} onGoLive={handleGoLive} />}
         </div>
       </div>
     </div>

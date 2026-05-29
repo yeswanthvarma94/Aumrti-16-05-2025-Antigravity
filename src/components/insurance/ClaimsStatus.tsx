@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { differenceInDays, addDays, format } from "date-fns";
 import EmptyState from "@/components/EmptyState";
-import AppealLetterModal from "./AppealLetterModal";
+import AppealLetterModal, { type AppealClaim } from "./AppealLetterModal";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { formatINR } from "@/lib/currency";
 import { AlertTriangle, Loader2 } from "lucide-react";
@@ -31,6 +31,11 @@ interface Claim {
   status: string;
   submitted_at: string | null;
   denial_reason: string | null;
+  rejection_code: string | null;
+  rejection_notice_date: string | null;
+  appeal_deadline: string | null;
+  appeal_submitted_at: string | null;
+  appeal_status: string | null;
   policy_number?: string | null;
   settlement_date?: string | null;
   tpa_reference?: string | null;
@@ -56,6 +61,20 @@ function irdaiBadge(claim: Claim): React.ReactNode {
   return <Badge variant="outline" className="text-[10px] text-emerald-700 border-emerald-300 bg-emerald-50">IRDAI: {daysLeft}d left</Badge>;
 }
 
+function appealDeadlineBadge(claim: Claim): React.ReactNode {
+  if (claim.status !== "rejected") return null;
+  if (!claim.appeal_deadline) return null;
+  const days = differenceInDays(new Date(claim.appeal_deadline), new Date());
+  const dateStr = format(new Date(claim.appeal_deadline), "dd MMM yyyy");
+  if (claim.appeal_submitted_at) {
+    return <Badge variant="outline" className="text-[10px] text-emerald-700 border-emerald-300 bg-emerald-50">✓ Appealed</Badge>;
+  }
+  if (days < 0)  return <Badge variant="outline" className="text-[10px] text-red-700 border-red-300 bg-red-50">⚠ Appeal deadline passed</Badge>;
+  if (days <= 7) return <Badge variant="outline" className="text-[10px] text-red-700 border-red-300 bg-red-50 animate-pulse">🔴 CRITICAL — Appeal by {dateStr} ({days}d)</Badge>;
+  if (days <= 14) return <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300 bg-amber-50">⏰ Appeal by {dateStr} ({days}d left)</Badge>;
+  return <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-200 bg-blue-50">Appeal by {dateStr} ({days}d left)</Badge>;
+}
+
 function resubmitDeadlineBadge(claim: Claim): React.ReactNode {
   if (claim.status !== "rejected") return null;
   const base = claim.resubmission_deadline || (claim.submitted_at ? addDays(new Date(claim.submitted_at), 60).toISOString() : null);
@@ -66,14 +85,29 @@ function resubmitDeadlineBadge(claim: Claim): React.ReactNode {
   return <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300 bg-amber-50">Resubmit by {format(new Date(base), "dd/MM/yy")}</Badge>;
 }
 
+const REJECTION_CODES = [
+  { value: "not_medically_necessary", label: "Not Medically Necessary" },
+  { value: "policy_exclusion",        label: "Policy Exclusion" },
+  { value: "pre_auth_not_obtained",   label: "Pre-Auth Not Obtained" },
+  { value: "incorrect_icd_code",      label: "Incorrect ICD Code" },
+  { value: "document_deficiency",     label: "Document Deficiency" },
+  { value: "duplicate_claim",         label: "Duplicate Claim" },
+  { value: "other",                   label: "Other" },
+];
+
 const ClaimsStatus: React.FC = () => {
   const [claims, setClaims] = useState<Claim[]>([]);
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
+  const [planTier, setPlanTier] = useState("manual");
   const [appealClaim, setAppealClaim] = useState<Claim | null>(null);
   const [denialModal, setDenialModal] = useState<Claim | null>(null);
   const [denialReason, setDenialReason] = useState("");
   const [denialCategory, setDenialCategory] = useState("");
+  // Enhanced rejection form state
+  const [rejectionCode, setRejectionCode] = useState("");
+  const [rejectionTpaRef, setRejectionTpaRef] = useState("");
+  const [rejectionNoticeDate, setRejectionNoticeDate] = useState(new Date().toISOString().slice(0, 10));
   const [denialStats, setDenialStats] = useState<{ category: string; count: number }[]>([]);
   const [topDenialsByTPA, setTopDenialsByTPA] = useState<{ tpa: string; reasons: string[] }[]>([]);
   const [resubmitClaim, setResubmitClaim] = useState<Claim | null>(null);
@@ -85,6 +119,11 @@ const ClaimsStatus: React.FC = () => {
   const { hospitalId } = useHospitalId();
 
   useEffect(() => { loadData(); loadDenialStats(); }, [filter]);
+  useEffect(() => {
+    if (!hospitalId) return;
+    (supabase as any).from("hospital_insurance_settings").select("plan_tier").eq("hospital_id", hospitalId).maybeSingle()
+      .then(({ data }: any) => { if (data?.plan_tier) setPlanTier(data.plan_tier); });
+  }, [hospitalId]);
 
   const loadData = async () => {
     setLoading(true);
@@ -115,9 +154,14 @@ const ClaimsStatus: React.FC = () => {
         policy_number: ca.policy_number || null,
         settlement_date: ca.settlement_date || null,
         tpa_reference: ca.tpa_reference || null,
-        bill_id: c.bill_id || null,
-        pre_auth_id: ca.pre_auth_id || null,
-        resubmission_count: Number(ca.resubmission_count || 0),
+        bill_id:               c.bill_id              || null,
+        pre_auth_id:           ca.pre_auth_id          || null,
+        rejection_code:        ca.rejection_code        || null,
+        rejection_notice_date: ca.rejection_notice_date || null,
+        appeal_deadline:       ca.appeal_deadline       || null,
+        appeal_submitted_at:   ca.appeal_submitted_at   || null,
+        appeal_status:         ca.appeal_status         || null,
+        resubmission_count:    Number(ca.resubmission_count || 0),
         resubmission_deadline: ca.resubmission_deadline || null,
       };
     }));
@@ -170,23 +214,44 @@ const ClaimsStatus: React.FC = () => {
     if (w) { w.document.write(`<html><head><title>TPA Receipt - ${c.claim_number || c.id}</title><style>@media print{body{padding:0}}</style></head><body>${html}</body></html>`); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); }
   };
 
-  const logDenial = async (claim: Claim) => {
-    if (!denialReason || !denialCategory) {
-      toast({ title: "Please fill reason and category", variant: "destructive" });
-      return;
+  const logRejectionDetails = async (claim: Claim) => {
+    if (!rejectionCode && !denialReason) {
+      toast({ title: "Select a rejection code or enter a reason", variant: "destructive" }); return;
     }
-    const { data: userData } = await supabase.from("users").select("hospital_id").eq("auth_user_id", (await supabase.auth.getUser()).data.user?.id || "").maybeSingle();
-    await supabase.from("denial_logs").insert({
-      hospital_id: userData?.hospital_id || "",
-      claim_id: claim.id,
-      denial_reason: denialReason,
-      category: denialCategory,
+    if (!rejectionNoticeDate) {
+      toast({ title: "Enter the date of rejection notice", variant: "destructive" }); return;
+    }
+    const { data: userData } = await supabase.from("users").select("hospital_id")
+      .eq("auth_user_id", (await supabase.auth.getUser()).data.user?.id || "").maybeSingle();
+    const appealDeadline = addDays(new Date(rejectionNoticeDate), 30).toISOString().slice(0, 10);
+
+    await Promise.all([
+      // Update insurance_claims with structured rejection data
+      (supabase as any).from("insurance_claims").update({
+        denial_reason:         denialReason || null,
+        rejection_code:        rejectionCode || null,
+        rejection_notice_date: rejectionNoticeDate,
+        appeal_deadline:       appealDeadline,
+        tpa_reference_number:  rejectionTpaRef || undefined,
+      }).eq("id", claim.id),
+
+      // Also insert into denial_logs for analytics
+      supabase.from("denial_logs").insert({
+        hospital_id:   userData?.hospital_id || hospitalId || "",
+        claim_id:      claim.id,
+        denial_reason: denialReason || rejectionCode || "",
+        category:      denialCategory || rejectionCode || "other",
+      }),
+    ]);
+
+    toast({
+      title: "Rejection details saved ✓",
+      description: `Appeal deadline: ${format(new Date(appealDeadline), "dd MMM yyyy")} (30 days from notice)`,
     });
-    toast({ title: "Denial logged ✓" });
     setDenialModal(null);
-    setDenialReason("");
-    setDenialCategory("");
-    loadDenialStats();
+    setDenialReason(""); setDenialCategory(""); setRejectionCode(""); setRejectionTpaRef("");
+    setRejectionNoticeDate(new Date().toISOString().slice(0, 10));
+    loadData(); loadDenialStats();
   };
 
 
@@ -306,6 +371,7 @@ const ClaimsStatus: React.FC = () => {
                   <div className="flex flex-col gap-1">
                     {statusBadge(c.status)}
                     {irdaiBadge(c)}
+                    {appealDeadlineBadge(c)}
                     {resubmitDeadlineBadge(c)}
                   </div>
                 </TableCell>
@@ -325,8 +391,29 @@ const ClaimsStatus: React.FC = () => {
                     )}
                     {c.status === "rejected" && (
                       <>
-                        <Button size="sm" variant="outline" className="text-[10px] h-6" onClick={() => setAppealClaim(c)}>📝 Appeal</Button>
-                        <Button size="sm" variant="outline" className="text-[10px] h-6" onClick={() => setDenialModal(c)}>📋 Log Denial</Button>
+                        <Button
+                          size="sm"
+                          className="text-[10px] h-6 bg-red-600 hover:bg-red-700 text-white"
+                          onClick={() => {
+                            setDenialModal(c);
+                            setRejectionCode(c.rejection_code || "");
+                            setRejectionTpaRef(c.tpa_reference || "");
+                            setRejectionNoticeDate(c.rejection_notice_date || new Date().toISOString().slice(0, 10));
+                            setDenialReason(c.denial_reason || "");
+                          }}
+                        >
+                          📋 {c.rejection_code ? "Update Rejection" : "Log Rejection"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-[10px] h-6 border-violet-300 text-violet-700 hover:bg-violet-50"
+                          onClick={() => setAppealClaim(c)}
+                          disabled={!c.rejection_code && !c.denial_reason}
+                          title={!c.rejection_code && !c.denial_reason ? "Log rejection details first" : undefined}
+                        >
+                          ⚖️ Appeal
+                        </Button>
                         <Button size="sm" variant="outline" className="text-[10px] h-6 border-blue-300 text-blue-700 hover:bg-blue-50" onClick={() => { setResubmitClaim(c); setResubmitReason(""); setResubmitConfirmed(false); }}>
                           Resubmit
                         </Button>
@@ -343,8 +430,10 @@ const ClaimsStatus: React.FC = () => {
       <AppealLetterModal
         open={!!appealClaim}
         onOpenChange={(open) => !open && setAppealClaim(null)}
-        claimId={appealClaim?.id}
-        claim={appealClaim}
+        claim={appealClaim as AppealClaim | null}
+        hospitalId={hospitalId || ""}
+        planTier={planTier}
+        onAppealSubmitted={() => { setAppealClaim(null); loadData(); }}
       />
 
       {tpaDecisionClaim && (
@@ -355,33 +444,72 @@ const ClaimsStatus: React.FC = () => {
         />
       )}
 
-      {/* Denial Log Modal */}
+      {/* Enhanced Rejection Capture Modal */}
       <Dialog open={!!denialModal} onOpenChange={(open) => !open && setDenialModal(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="text-base">Log Denial Details</DialogTitle>
+            <DialogTitle className="text-base flex items-center gap-2">
+              📋 Log Rejection Details
+            </DialogTitle>
           </DialogHeader>
           {denialModal && (
             <div className="space-y-4">
-              <div className="text-xs text-muted-foreground">
-                Claim: {denialModal.claim_number || "—"} · {denialModal.tpa_name} · {formatINR(denialModal.claimed_amount)}
+              <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                {denialModal.claim_number || "—"} · {denialModal.tpa_name} · {formatINR(denialModal.claimed_amount)}
               </div>
+
               <div>
-                <Label className="text-sm font-semibold">Denial Category</Label>
-                <Select value={denialCategory} onValueChange={setDenialCategory}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select category" /></SelectTrigger>
+                <Label className="text-sm font-semibold">Rejection Code *</Label>
+                <Select value={rejectionCode} onValueChange={v => { setRejectionCode(v); setDenialCategory(v); }}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select rejection reason code" /></SelectTrigger>
                   <SelectContent>
-                    {DENIAL_CATEGORIES.map(cat => (
-                      <SelectItem key={cat} value={cat}>{cat.replace(/_/g, " ")}</SelectItem>
+                    {REJECTION_CODES.map(r => (
+                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+
               <div>
-                <Label className="text-sm font-semibold">Denial Reason</Label>
-                <Input className="mt-1" value={denialReason} onChange={e => setDenialReason(e.target.value)} placeholder="Specific reason from TPA" />
+                <Label className="text-sm font-semibold">Rejection Reason (TPA's exact wording)</Label>
+                <Input
+                  className="mt-1"
+                  value={denialReason}
+                  onChange={e => setDenialReason(e.target.value)}
+                  placeholder="e.g. Treatment not medically necessary as per policy clause 4.2"
+                />
               </div>
-              <Button onClick={() => logDenial(denialModal)} className="w-full">Log Denial</Button>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-sm font-semibold">TPA Rejection Reference #</Label>
+                  <Input
+                    className="mt-1"
+                    value={rejectionTpaRef}
+                    onChange={e => setRejectionTpaRef(e.target.value)}
+                    placeholder="TPA/REJ/2026/XXXX"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm font-semibold">Date of Rejection Notice *</Label>
+                  <Input
+                    className="mt-1"
+                    type="date"
+                    value={rejectionNoticeDate}
+                    onChange={e => setRejectionNoticeDate(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {rejectionNoticeDate && (
+                <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-800">
+                  Appeal deadline will be set to: <strong>{format(addDays(new Date(rejectionNoticeDate), 30), "dd MMM yyyy")}</strong> (30 days from notice)
+                </div>
+              )}
+
+              <Button onClick={() => logRejectionDetails(denialModal)} className="w-full gap-1.5">
+                Save Rejection Details &amp; Set Appeal Deadline
+              </Button>
             </div>
           )}
         </DialogContent>

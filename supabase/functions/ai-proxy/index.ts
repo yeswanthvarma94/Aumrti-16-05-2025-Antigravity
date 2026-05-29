@@ -146,7 +146,8 @@ serve(async (req: Request) => {
       tokens_used = data.usage?.total_tokens;
 
     } else if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const apiVersion = (model.includes("preview") || model.includes("experimental")) ? "v1beta" : "v1";
+      const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

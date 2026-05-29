@@ -136,8 +136,10 @@ export const PROVIDER_MODELS: Record<string, { label: string; value: string }[]>
     { label: "o1 (Reasoning)", value: "o1" },
   ],
   gemini: [
-    { label: "Gemini 2.5 Pro (Recommended)", value: "gemini-2.5-pro-preview-06-05" },
-    { label: "Gemini 2.5 Flash (Fast)", value: "gemini-2.5-flash-preview-05-20" },
+    { label: "Gemini 2.0 Flash (Recommended)", value: "gemini-2.0-flash" },
+    { label: "Gemini 2.0 Flash Lite (Fastest)", value: "gemini-2.0-flash-lite" },
+    { label: "Gemini 2.5 Pro Preview", value: "gemini-2.5-pro-preview-06-05" },
+    { label: "Gemini 2.5 Flash Preview", value: "gemini-2.5-flash-preview-05-20" },
     { label: "Gemini 1.5 Pro", value: "gemini-1.5-pro" },
     { label: "Gemini 1.5 Flash", value: "gemini-1.5-flash" },
   ],
@@ -263,7 +265,11 @@ const callOpenAI = async (params: ProviderCallParams): Promise<AIResponse> => {
 };
 
 const callGemini = async (params: ProviderCallParams): Promise<AIResponse> => {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${params.model}:generateContent?key=${params.apiKey}`;
+  // Preview/experimental models live on v1beta; stable models use v1.
+  const apiVersion = params.model.includes("preview") || params.model.includes("experimental")
+    ? "v1beta"
+    : "v1";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${params.model}:generateContent?key=${params.apiKey}`.replace("v1beta", apiVersion);
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

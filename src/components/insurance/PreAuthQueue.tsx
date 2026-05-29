@@ -8,11 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { differenceInDays, differenceInHours, isPast, addDays } from "date-fns";
-import { ClipboardList, Send, Sparkles, Loader2, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, Clock, MessageCircle, Search, Plus, X, Trash2 } from "lucide-react";
+import { ClipboardList, Send, Sparkles, Loader2, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, Clock, MessageCircle, Search, Plus, X, Trash2, Bot, Download } from "lucide-react";
+import { useInsuranceSubmission, type SubmissionMode } from "@/hooks/useInsuranceSubmission";
 import PmjaySection from "./PmjaySection";
 import PreAuthQualityGate, { type QualityGateInput } from "./PreAuthQualityGate";
+import PolicyVerificationPanel, {
+  type PlanTier,
+  type PolicyVerificationData,
+} from "./PolicyVerificationPanel";
+import ICD10Search, { ProcedureCodeSearch } from "./ICD10Search";
+import DocumentChecklist from "./DocumentChecklist";
 import { callAI } from "@/lib/aiProvider";
 import { formatINR } from "@/lib/currency";
 import PatientDocuments from "@/components/clinical/PatientDocuments";
@@ -50,6 +58,8 @@ interface AdmissionContext {
   patient_name: string;
   insurance_type: string;
   admitted_at?: string;
+  estimated_amount?: string;
+  notes?: string;
 }
 
 interface Props {
@@ -140,17 +150,43 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
   const [tpaRespDenialReason, setTpaRespDenialReason] = useState("");
   const [tpaRespSaving, setTpaRespSaving] = useState(false);
 
+  // Hospital insurance plan tier (fetched from hospital_insurance_settings)
+  const [planTier, setPlanTier] = useState<PlanTier>("manual");
+
+  // Policy verification
+  const [policyVerified, setPolicyVerified] = useState(false);
+  const [policyData, setPolicyData] = useState<PolicyVerificationData | null>(null);
+
+  // Document checklist readiness
+  const [docsReady, setDocsReady] = useState(false);
+  const [docsStats, setDocsStats] = useState({ ready: 0, required: 0 });
+
   // Auth user id for document upload
   const [userId, setUserId] = useState("");
 
   const { toast } = useToast();
   const { hospitalId } = useHospitalId();
 
+  const submission = useInsuranceSubmission(hospitalId ?? "");
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user?.id) setUserId(data.user.id);
     });
   }, []);
+
+  // Fetch hospital insurance plan tier once hospitalId is known
+  useEffect(() => {
+    if (!hospitalId) return;
+    (supabase as any)
+      .from("hospital_insurance_settings")
+      .select("plan_tier")
+      .eq("hospital_id", hospitalId)
+      .maybeSingle()
+      .then(({ data }: { data: { plan_tier: string } | null }) => {
+        if (data?.plan_tier) setPlanTier(data.plan_tier as PlanTier);
+      });
+  }, [hospitalId]);
 
   const recordTPAResponse = async () => {
     if (!selected) return;
@@ -293,15 +329,15 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
       setMlcNumber("");
       setFirNumber("");
       setFormState({
-        admission_id: initialAdmission.admission_id,
-        patient_id: initialAdmission.patient_id,
-        patient_name: initialAdmission.patient_name,
-        tpa_name: initialAdmission.insurance_type === "self_pay" ? "" : (initialAdmission.insurance_type || ""),
-        policy_number: "",
-        estimated_amount: "",
-        diagnosis_codes: "",
-        procedure_codes: "",
-        notes: "",
+        admission_id:     initialAdmission.admission_id,
+        patient_id:       initialAdmission.patient_id,
+        patient_name:     initialAdmission.patient_name,
+        tpa_name:         initialAdmission.insurance_type === "self_pay" ? "" : (initialAdmission.insurance_type || ""),
+        policy_number:    "",
+        estimated_amount: initialAdmission.estimated_amount ?? "",
+        diagnosis_codes:  "",
+        procedure_codes:  "",
+        notes:            initialAdmission.notes ?? "",
       });
       // Fetch admitted_at for intimation window
       if (initialAdmission.admitted_at) {
@@ -326,6 +362,10 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
     setParentPreAuthId(null);
     setSelected(pa);
     setIntimationSaved(false);
+    setPolicyVerified(false);
+    setPolicyData(null);
+    setDocsReady(false);
+    setDocsStats({ ready: 0, required: 0 });
     setIsAccidentCase((pa as any).is_accident_case ?? false);
     setMlcNumber((pa as any).mlc_number ?? "");
     setFirNumber((pa as any).fir_number ?? "");
@@ -436,26 +476,38 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
     is_extension: isExtensionForm,
     parent_pre_auth_id: isExtensionForm ? parentPreAuthId : null,
     extension_reason: isExtensionForm ? (formState.extension_reason || null) : null,
+    document_checklist: policyData ? policyData.checklist : null,
   });
 
-  const handleCreateAndSubmit = async (status: string) => {
+  const handleCreateAndSubmit = async (status: string, submission_mode?: string): Promise<string | null> => {
     if (!formState.patient_id) {
       toast({ title: "No patient selected", variant: "destructive" });
-      return;
+      return null;
     }
     if (!hospitalId) {
       toast({ title: "Could not determine hospital", variant: "destructive" });
-      return;
+      return null;
     }
-    const { error } = await (supabase as any).from("insurance_pre_auth").insert(buildPayload(status));
+    const payload = { ...buildPayload(status), ...(submission_mode ? { submission_mode } : {}) };
+    const { data, error } = await (supabase as any)
+      .from("insurance_pre_auth")
+      .insert(payload)
+      .select("id")
+      .single();
     if (!error) {
-      toast({ title: status === "submitted" ? (isExtensionForm ? "Extension submitted ✓" : "Pre-auth submitted ✓") : "Draft saved" });
+      if (status === "submitted") {
+        toast({ title: isExtensionForm ? "Extension submitted ✓" : "Pre-auth submitted ✓" });
+      } else if (status !== "pending") {
+        toast({ title: "Draft saved" });
+      }
       setIsNewForm(false);
       setIsExtensionForm(false);
       setFormState({});
       loadData();
+      return data?.id ?? null;
     } else {
       toast({ title: "Error creating pre-auth", description: error.message, variant: "destructive" });
+      return null;
     }
   };
 
@@ -838,6 +890,24 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
 
             {/* ── MAIN FORM FIELDS ─────────────────────────────────── */}
             <div className="space-y-4">
+              {/* ── POLICY VERIFICATION ─────────────────────────────── */}
+              <PolicyVerificationPanel
+                planTier={planTier}
+                hospitalId={hospitalId || ""}
+                tpaName={formState.tpa_name || ""}
+                tpaCode={selectedTpaConfig?.tpa_code || ""}
+                patientName={formState.patient_name || selected?.patient_name || ""}
+                initialPolicyNumber={formState.policy_number || ""}
+                onVerified={(data) => {
+                  setPolicyVerified(true);
+                  setPolicyData(data);
+                }}
+                onUnverified={() => {
+                  setPolicyVerified(false);
+                  setPolicyData(null);
+                }}
+              />
+
               {isExtensionForm && (
                 <div>
                   <Label className="text-sm font-semibold">Extension Reason *</Label>
@@ -875,12 +945,20 @@ const PreAuthQueue: React.FC<Props> = ({ initialAdmission, onAdmissionHandled })
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-sm font-semibold">Diagnosis / ICD Codes</Label>
-                  <Input className="mt-1" placeholder="E11.9, J44.1" value={formState.diagnosis_codes} onChange={e => setFormState({ ...formState, diagnosis_codes: e.target.value })} />
+                  <Label className="text-sm font-semibold">Diagnosis / ICD-10 Codes</Label>
+                  <ICD10Search
+                    className="mt-1"
+                    value={formState.diagnosis_codes ? formState.diagnosis_codes.split(",").map((s: string) => s.trim()).filter(Boolean) : []}
+                    onChange={(codes) => setFormState({ ...formState, diagnosis_codes: codes.join(", ") })}
+                  />
                 </div>
                 <div>
-                  <Label className="text-sm font-semibold">Procedure Codes</Label>
-                  <Input className="mt-1" placeholder="47600, 44970" value={formState.procedure_codes} onChange={e => setFormState({ ...formState, procedure_codes: e.target.value })} />
+                  <Label className="text-sm font-semibold">Procedure Codes (CPT)</Label>
+                  <ProcedureCodeSearch
+                    className="mt-1"
+                    value={formState.procedure_codes ? formState.procedure_codes.split(",").map((s: string) => s.trim()).filter(Boolean) : []}
+                    onChange={(codes) => setFormState({ ...formState, procedure_codes: codes.join(", ") })}
+                  />
                 </div>
               </div>
 
@@ -1007,7 +1085,22 @@ Write a 3-4 paragraph medical necessity justification suitable for Indian privat
                 <PmjaySection onPackageSelect={(rate) => setFormState({ ...formState, estimated_amount: rate })} />
               )}
 
-              {/* ── DOCUMENTS ─────────────────────────────────────── */}
+              {/* ── DOCUMENT CHECKLIST ────────────────────────────── */}
+              {(formState.admission_id || selected?.admission_id) && hospitalId && (
+                <DocumentChecklist
+                  preAuthId={selected?.id || ""}
+                  tpaName={formState.tpa_name || selected?.tpa_name || ""}
+                  admissionId={formState.admission_id || selected?.admission_id || ""}
+                  hospitalId={hospitalId}
+                  planTier={planTier}
+                  onReadinessChange={(ready, stats) => {
+                    setDocsReady(ready);
+                    setDocsStats(stats);
+                  }}
+                />
+              )}
+
+              {/* ── PATIENT DOCUMENTS (general) ───────────────────── */}
               {(formState.patient_id || selected?.patient_id) && hospitalId && (
                 <div className="border border-border rounded-lg p-3">
                   <PatientDocuments
@@ -1018,15 +1111,84 @@ Write a 3-4 paragraph medical necessity justification suitable for Indian privat
                 </div>
               )}
 
-              <div className="flex gap-2 pt-2">
-                <Button onClick={() => setQualityGateOpen(true)} className="gap-1.5">
-                  <Send size={14} />
-                  {isExtensionForm ? "Submit Extension" : formState.tpa_name?.toLowerCase().includes("pmjay") ? "Submit for PMJAY Pre-Auth" : "Submit Pre-Auth"}
-                </Button>
-                <Button variant="outline" onClick={handleSaveDraft}>Save Draft</Button>
-                {isNewForm && (
-                  <Button variant="ghost" onClick={() => { setIsNewForm(false); setIsExtensionForm(false); setFormState({}); }}>Cancel</Button>
+              {/* ── SUBMISSION AREA ─────────────────────────────── */}
+              <div className="border border-border rounded-lg p-3 space-y-3 bg-muted/20">
+                {/* Gates */}
+                {(!policyVerified || !docsReady) && (
+                  <div className="space-y-1">
+                    {!policyVerified && (
+                      <p className="text-xs text-amber-600 flex items-center gap-1">⚠ Policy must be verified before submitting.</p>
+                    )}
+                    {policyVerified && !docsReady && (
+                      <p className="text-xs text-amber-600 flex items-center gap-1">⚠ Complete document checklist — {docsStats.ready}/{docsStats.required} required docs ready.</p>
+                    )}
+                  </div>
                 )}
+
+                {/* Progress indicator */}
+                {submission.submitting && (
+                  <div className="flex items-center gap-2 text-sm text-primary">
+                    <Loader2 size={14} className="animate-spin" />
+                    {submission.progress || "Submitting…"}
+                  </div>
+                )}
+
+                {/* Result badge */}
+                {submission.result && (
+                  <div className={cn(
+                    "flex items-center gap-2 rounded-md px-3 py-2 text-sm",
+                    submission.result.success ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"
+                  )}>
+                    {submission.result.success ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                    <span>{submission.result.message}</span>
+                    {submission.result.submissionMode && (
+                      <Badge variant="outline" className="text-xs ml-auto">
+                        {submission.result.submissionMode === "manual" ? "Manual"
+                          : submission.result.submissionMode === "ai_assisted" ? "AI Assisted"
+                          : "Auto-Submitted"}
+                      </Badge>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex gap-2 flex-wrap">
+                  {/* Plan-specific submit button */}
+                  {planTier === "manual" && (
+                    <Button
+                      onClick={() => setQualityGateOpen(true)}
+                      className="gap-1.5"
+                      disabled={!policyVerified || !docsReady || submission.submitting}
+                    >
+                      <Send size={14} />
+                      {isExtensionForm ? "Submit Extension" : "✓ Mark as Submitted Manually"}
+                    </Button>
+                  )}
+                  {planTier === "ai_assisted" && (
+                    <Button
+                      onClick={() => setQualityGateOpen(true)}
+                      className="gap-1.5 bg-violet-600 hover:bg-violet-700"
+                      disabled={!policyVerified || !docsReady || submission.submitting}
+                    >
+                      <Sparkles size={14} />
+                      📄 Generate &amp; Submit
+                    </Button>
+                  )}
+                  {planTier === "automated" && (
+                    <Button
+                      onClick={() => setQualityGateOpen(true)}
+                      className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                      disabled={!policyVerified || !docsReady || submission.submitting}
+                    >
+                      <Bot size={14} />
+                      🤖 Auto-Submit to TPA
+                    </Button>
+                  )}
+
+                  <Button variant="outline" onClick={handleSaveDraft} disabled={submission.submitting}>Save Draft</Button>
+                  {isNewForm && (
+                    <Button variant="ghost" onClick={() => { setIsNewForm(false); setIsExtensionForm(false); setFormState({}); }}>Cancel</Button>
+                  )}
+                </div>
               </div>
 
               {/* ── QUALITY GATE MODAL ── */}
@@ -1051,15 +1213,84 @@ Write a 3-4 paragraph medical necessity justification suitable for Indian privat
                   intimationSentAt: intimationSaved ? intimationTime : null,
                   requiredDocuments: selectedTpaConfig?.required_documents || [],
                 }}
-                onProceed={() => {
+                onProceed={async () => {
                   setQualityGateOpen(false);
-                  handleSubmit();
+
+                  // Resolve the pre-auth ID — create record first if this is a new form
+                  let targetId: string | null = selected?.id ?? null;
+
+                  if (isNewForm) {
+                    if (planTier === "manual") {
+                      // Manual: create with status='submitted' directly (legacy path + submission_mode)
+                      await handleCreateAndSubmit("submitted", "manual");
+                      return;
+                    }
+                    // AI / Automated: create as 'pending', then hook handles status transition
+                    targetId = await handleCreateAndSubmit("pending", planTier);
+                    if (!targetId) return;
+                  } else if (planTier === "manual") {
+                    // Existing record, manual mode — use original update logic
+                    await handleSubmit();
+                    return;
+                  }
+
+                  if (!targetId) return;
+
+                  await submission.submitPreAuth(
+                    targetId,
+                    planTier as SubmissionMode,
+                    {
+                      patientName:     formState.patient_name    || selected?.patient_name    || "",
+                      tpaName:         formState.tpa_name        || selected?.tpa_name        || "",
+                      diagnosisCodes:  formState.diagnosis_codes || "",
+                      procedureCodes:  formState.procedure_codes || "",
+                      estimatedAmount: Number(formState.estimated_amount) || selected?.estimated_amount || 0,
+                      notes:           formState.notes           || selected?.notes           || "",
+                      policyNumber:    formState.policy_number   || selected?.policy_number   || "",
+                    },
+                  );
+                  loadData();
                 }}
               />
             </div>
           </div>
         )}
       </div>
+
+      {/* ── AI Cover Letter Modal ── */}
+      <Dialog open={submission.coverLetter.open} onOpenChange={submission.closeCoverLetter}>
+        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles size={16} className="text-violet-600" />
+              AI-Generated Pre-Auth Cover Letter
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto">
+            <pre className="whitespace-pre-wrap text-xs font-mono bg-muted/50 rounded-lg p-4 leading-relaxed">
+              {submission.coverLetter.text}
+            </pre>
+          </div>
+          <div className="flex items-center gap-3 pt-3 border-t border-border">
+            <Button className="gap-1.5" onClick={submission.downloadCoverLetter}>
+              <Download size={14} /> Download Letter
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={async () => {
+                await submission.confirmCoverLetterSubmitted();
+                loadData();
+              }}
+            >
+              <CheckCircle2 size={14} /> Mark as Submitted
+            </Button>
+            <p className="text-xs text-muted-foreground ml-auto">
+              Download the letter, attach clinical documents, then mark as submitted.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

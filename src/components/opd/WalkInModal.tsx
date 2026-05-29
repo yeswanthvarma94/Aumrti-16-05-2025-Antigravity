@@ -345,6 +345,14 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
       toast({ title: "Patient name is required", variant: "destructive" });
       return;
     }
+    if (!deptId) {
+      toast({ title: "Department is required", description: "Please select a department before proceeding", variant: "destructive" });
+      return;
+    }
+    if (!doctorId) {
+      toast({ title: "Doctor is required", description: "Please select a doctor before proceeding", variant: "destructive" });
+      return;
+    }
     if (!useExisting && !dpdpConsent) {
       toast({ title: "DPDP consent required", description: "Patient must consent to data collection before registration", variant: "destructive" });
       return;
@@ -1141,20 +1149,13 @@ const WalkInModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, defaultD
               {submitting ? "Processing..." : `💳 Pay ₹${consultationFee.toLocaleString("en-IN")} & Issue Token →`}
             </button>
 
-            {/* Skip / Back */}
-            <div className="flex items-center justify-between mt-3">
+            {/* Back */}
+            <div className="flex items-center mt-3">
               <button
                 onClick={() => setStep("details")}
                 className="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1"
               >
                 <ArrowLeft className="h-3 w-3" /> Back to details
-              </button>
-              <button
-                onClick={() => handlePayAndIssue(true)}
-                disabled={submitting}
-                className="text-xs text-amber-600 font-medium hover:underline"
-              >
-                Skip — Pay Later →
               </button>
             </div>
           </>

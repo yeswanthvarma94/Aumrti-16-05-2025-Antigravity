@@ -20,7 +20,6 @@ import {
   KNOWN_SERVICES,
   PROVIDER_TO_SERVICE_KEY,
   getProviderLabel,
-  callAI,
   getMergedModels,
   getCustomModels,
   saveCustomModels,
@@ -30,11 +29,12 @@ import {
 } from "lucide-react";
 
 const PROVIDERS = [
-  { value: "claude", label: "🤖 Claude (Anthropic)" },
-  { value: "openai", label: "💡 GPT-4 (OpenAI)" },
-  { value: "gemini", label: "✨ Gemini (Google)" },
-  { value: "perplexity", label: "🔍 Perplexity AI" },
-  { value: "ollama", label: "🦙 Ollama (Local)" },
+  { value: "claude",        label: "🤖 Claude (Anthropic)" },
+  { value: "openai",        label: "💡 GPT-4 (OpenAI)" },
+  { value: "azure_openai",  label: "🇮🇳 Azure OpenAI (India Central — DPDP)" },
+  { value: "gemini",        label: "✨ Gemini (Google)" },
+  { value: "perplexity",    label: "🔍 Perplexity AI" },
+  { value: "ollama",        label: "🦙 Ollama (Local)" },
 ];
 
 interface AIConfig {
@@ -74,7 +74,7 @@ const APIConfigHubPage: React.FC = () => {
 
   // API Key drawer
   const [editingKey, setEditingKey] = useState<typeof KNOWN_SERVICES[0] | null>(null);
-  const [keyForm, setKeyForm] = useState({ api_key: "", endpoint: "", mode: "production" });
+  const [keyForm, setKeyForm] = useState({ api_key: "", endpoint: "", mode: "production", deployment: "", api_version: "2024-02-01" });
   const [showSecret, setShowSecret] = useState(false);
   const [customModelInput, setCustomModelInput] = useState("");
   const [modelRefreshKey, setModelRefreshKey] = useState(0);
@@ -213,11 +213,20 @@ const APIConfigHubPage: React.FC = () => {
     if (!hospitalId || !editingKey) return;
     setSaving(editingKey.service_key);
     const existing = getApiKeyForService(editingKey.service_key);
+    const config: Record<string, string> = {
+      api_key: keyForm.api_key,
+      endpoint: keyForm.endpoint || editingKey.endpoint,
+      mode: keyForm.mode,
+    };
+    if (editingKey.service_key === "azure_openai") {
+      config.deployment = keyForm.deployment;
+      config.api_version = keyForm.api_version || "2024-02-01";
+    }
     const payload = {
       hospital_id: hospitalId,
       service_name: editingKey.service_name,
       service_key: editingKey.service_key,
-      config: { api_key: keyForm.api_key, endpoint: keyForm.endpoint || editingKey.endpoint, mode: keyForm.mode },
+      config,
       is_active: true,
     };
 
@@ -257,7 +266,9 @@ const APIConfigHubPage: React.FC = () => {
 
     try {
       if (serviceKey === "gemini") {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+        // Use v1 (stable) endpoint with gemini-2.0-flash for connection testing.
+        // gemini-1.5-flash was moved out of v1beta; preview models still use v1beta.
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contents: [{ parts: [{ text: "Hi" }] }], generationConfig: { maxOutputTokens: 1 } }),
@@ -278,6 +289,24 @@ const APIConfigHubPage: React.FC = () => {
         });
         success = res.ok;
         if (!success) { const d = await res.json(); message = d.error?.message || `HTTP ${res.status}`; }
+      } else if (serviceKey === "azure_openai") {
+        const cfg = existing.config as Record<string, string>;
+        const endpoint = cfg.endpoint?.replace(/\/$/, "");
+        const deployment = cfg.deployment;
+        const apiVersion = cfg.api_version || "2024-02-01";
+        if (!endpoint || !deployment) {
+          success = false;
+          message = !endpoint ? "Endpoint URL is required" : "Deployment Name is required";
+        } else {
+          const url = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${apiVersion}`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "api-key": apiKey },
+            body: JSON.stringify({ messages: [{ role: "user", content: "Hi" }], max_tokens: 1 }),
+          });
+          success = res.ok;
+          if (!success) { const d = await res.json(); message = d.error?.message || `HTTP ${res.status}`; }
+        }
       } else if (serviceKey === "perplexity") {
         const res = await fetch("https://api.perplexity.ai/chat/completions", {
           method: "POST",
@@ -318,20 +347,119 @@ const APIConfigHubPage: React.FC = () => {
     setPlayRunning(true);
     setPlayResult(null);
     const start = Date.now();
-    const result = await callAI({
-      featureKey: playFeature,
-      hospitalId,
-      prompt: playPrompt,
-    });
-    const ms = Date.now() - start;
-    setPlayResult({
-      text: result.error || result.text,
-      provider: result.provider,
-      model: result.model,
-      tokens: result.tokens_used,
-      ms,
-    });
-    setPlayRunning(false);
+
+    try {
+      // Resolve AI config: feature-specific first, then global_default
+      let config: any = null;
+      const { data: fc } = await supabase
+        .from("ai_provider_config").select("*")
+        .eq("hospital_id", hospitalId).eq("feature_key", playFeature).eq("is_active", true).maybeSingle();
+      config = fc;
+      if (!config) {
+        const { data: dc } = await supabase
+          .from("ai_provider_config").select("*")
+          .eq("hospital_id", hospitalId).eq("feature_key", "global_default").eq("is_active", true).maybeSingle();
+        config = dc;
+      }
+
+      if (!config) {
+        setPlayResult({ text: "No AI provider configured. Go to API Hub and add a provider.", provider: "none", model: "none", ms: Date.now() - start });
+        return;
+      }
+
+      const { provider, model_name, temperature, max_tokens } = config;
+      const serviceKey = PROVIDER_TO_SERVICE_KEY[provider] || provider;
+
+      // Fetch API key from api_configurations (never sent to browser in normal flow — OK here for dev playground)
+      const { data: apiCfg } = await supabase
+        .from("api_configurations").select("config")
+        .eq("hospital_id", hospitalId).eq("service_key", serviceKey).eq("is_active", true).maybeSingle();
+      const apiKey = (apiCfg?.config as Record<string, string>)?.api_key;
+
+      if (!apiKey) {
+        setPlayResult({ text: `No API key for ${provider}. Add it in the API Hub.`, provider, model: model_name, ms: Date.now() - start });
+        return;
+      }
+
+      const maxTok = Number(max_tokens) || 600;
+      const temp = Number(temperature) || 0.3;
+      let text = "";
+      let tokens_used: number | undefined;
+
+      if (provider === "gemini") {
+        const apiVersion = (model_name.includes("preview") || model_name.includes("experimental")) ? "v1beta" : "v1";
+        const res = await fetch(`https://generativelanguage.googleapis.com/${apiVersion}/models/${model_name}:generateContent?key=${apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: [{ parts: [{ text: playPrompt }] }], generationConfig: { maxOutputTokens: maxTok, temperature: temp } }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        tokens_used = data.usageMetadata?.totalTokenCount;
+
+      } else if (provider === "openai") {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model: model_name, max_tokens: maxTok, temperature: temp, messages: [{ role: "user", content: playPrompt }] }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        text = data.choices?.[0]?.message?.content || "";
+        tokens_used = data.usage?.total_tokens;
+
+      } else if (provider === "claude") {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+          body: JSON.stringify({ model: model_name, max_tokens: maxTok, temperature: temp, messages: [{ role: "user", content: playPrompt }] }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        text = data.content?.[0]?.text || "";
+        tokens_used = (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0);
+
+      } else if (provider === "perplexity") {
+        const res = await fetch("https://api.perplexity.ai/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ model: model_name, max_tokens: maxTok, messages: [{ role: "user", content: playPrompt }] }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        text = data.choices?.[0]?.message?.content || "";
+
+      } else if (provider === "azure_openai") {
+        const azureCfg = (await supabase
+          .from("api_configurations").select("config")
+          .eq("hospital_id", hospitalId).eq("service_key", "azure_openai").eq("is_active", true).maybeSingle()).data;
+        const ac = azureCfg?.config as Record<string, string> | undefined;
+        if (!ac?.endpoint || !ac?.deployment) {
+          text = "Azure OpenAI: set Endpoint URL and Deployment Name in API Hub first.";
+        } else {
+          const azureUrl = `${ac.endpoint.replace(/\/$/, "")}/openai/deployments/${ac.deployment}/chat/completions?api-version=${ac.api_version || "2024-02-01"}`;
+          const res = await fetch(azureUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "api-key": apiKey },
+            body: JSON.stringify({ messages: [{ role: "user", content: playPrompt }], max_tokens: maxTok, temperature: temp }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+          text = data.choices?.[0]?.message?.content || "";
+          tokens_used = data.usage?.total_tokens;
+        }
+      } else {
+        text = `Direct browser calls not supported for provider: ${provider}. Deploy the ai-proxy edge function.`;
+      }
+
+      setPlayResult({ text, provider, model: model_name, tokens: tokens_used, ms: Date.now() - start });
+    } catch (err: any) {
+      setPlayResult({ text: err?.message || "Unknown error", provider: "unknown", model: "unknown", ms: Date.now() - start });
+    } finally {
+      setPlayRunning(false);
+    }
+
   };
 
   const getStatusBadge = (svc: typeof KNOWN_SERVICES[0]) => {
@@ -439,18 +567,30 @@ const APIConfigHubPage: React.FC = () => {
                 </Select>
               </div>
               <div>
-                <Label className="text-xs">Model</Label>
-                <Select
-                  value={globalConfig?.model_name || ""}
-                  onValueChange={v => updateAIConfig("global_default", { model_name: v })}
-                >
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {getMergedModels(globalConfig?.provider || "claude").map(m => (
-                      <SelectItem key={m.value} value={m.value}>{m.label}{m.isCustom ? " ★" : ""}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label className="text-xs">Model{globalConfig?.provider === "azure_openai" ? " / Deployment" : ""}</Label>
+                {globalConfig?.provider === "azure_openai" ? (
+                  <div>
+                    <Input
+                      className="mt-1 text-xs"
+                      value={globalConfig?.model_name || ""}
+                      onChange={e => updateAIConfig("global_default", { model_name: e.target.value })}
+                      placeholder="Deployment name (e.g. gpt-4o)"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Must match deployment name in Azure AI Foundry</p>
+                  </div>
+                ) : (
+                  <Select
+                    value={globalConfig?.model_name || ""}
+                    onValueChange={v => updateAIConfig("global_default", { model_name: v })}
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {getMergedModels(globalConfig?.provider || "claude").map(m => (
+                        <SelectItem key={m.value} value={m.value}>{m.label}{m.isCustom ? " ★" : ""}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div>
                 <Label className="text-xs">API Key Source</Label>
@@ -527,17 +667,26 @@ const APIConfigHubPage: React.FC = () => {
                         </Select>
                       </td>
                       <td className="px-4 py-2.5">
-                        <Select
-                          value={config?.model_name || globalConfig?.model_name || ""}
-                          onValueChange={v => updateAIConfig(key, { model_name: v })}
-                        >
-                          <SelectTrigger className="h-8 text-xs w-[200px]"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {getMergedModels(config?.provider || globalConfig?.provider || "claude").map(m => (
-                              <SelectItem key={m.value} value={m.value}>{m.label}{m.isCustom ? " ★" : ""}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        {(config?.provider || globalConfig?.provider) === "azure_openai" ? (
+                          <Input
+                            className="h-8 text-xs w-[200px]"
+                            value={config?.model_name || globalConfig?.model_name || ""}
+                            onChange={e => updateAIConfig(key, { model_name: e.target.value })}
+                            placeholder="Deployment name"
+                          />
+                        ) : (
+                          <Select
+                            value={config?.model_name || globalConfig?.model_name || ""}
+                            onValueChange={v => updateAIConfig(key, { model_name: v })}
+                          >
+                            <SelectTrigger className="h-8 text-xs w-[200px]"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {getMergedModels(config?.provider || globalConfig?.provider || "claude").map(m => (
+                                <SelectItem key={m.value} value={m.value}>{m.label}{m.isCustom ? " ★" : ""}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
@@ -714,10 +863,13 @@ const APIConfigHubPage: React.FC = () => {
                           onClick={() => {
                             setEditingKey(svc);
                             const ex = getApiKeyForService(svc.service_key);
+                            const cfg = (ex?.config as Record<string, string>) || {};
                             setKeyForm({
-                              api_key: (ex?.config as Record<string, string>)?.api_key || "",
-                              endpoint: (ex?.config as Record<string, string>)?.endpoint || svc.endpoint,
-                              mode: (ex?.config as Record<string, string>)?.mode || "production",
+                              api_key: cfg.api_key || "",
+                              endpoint: cfg.endpoint || svc.endpoint,
+                              mode: cfg.mode || "production",
+                              deployment: cfg.deployment || "",
+                              api_version: cfg.api_version || "2024-02-01",
                             });
                             setShowSecret(false);
                           }}
@@ -829,8 +981,48 @@ const APIConfigHubPage: React.FC = () => {
                 className="mt-1"
                 value={keyForm.endpoint}
                 onChange={e => setKeyForm(p => ({ ...p, endpoint: e.target.value }))}
+                placeholder={editingKey?.service_key === "azure_openai" ? "https://YOUR-RESOURCE.openai.azure.com/" : ""}
               />
             </div>
+
+            {editingKey?.service_key === "azure_openai" && (
+              <>
+                <div>
+                  <Label>Deployment Name</Label>
+                  <Input
+                    className="mt-1"
+                    value={keyForm.deployment}
+                    onChange={e => setKeyForm(p => ({ ...p, deployment: e.target.value }))}
+                    placeholder="e.g. gpt-4o, gpt-4.1-nano, o4-mini"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    The deployment name you created in Azure AI Foundry / Azure OpenAI Studio.
+                  </p>
+                </div>
+                <div>
+                  <Label>API Version</Label>
+                  <Input
+                    className="mt-1"
+                    list="azure-api-versions"
+                    value={keyForm.api_version}
+                    onChange={e => setKeyForm(p => ({ ...p, api_version: e.target.value }))}
+                    placeholder="e.g. 2025-01-01-preview"
+                  />
+                  <datalist id="azure-api-versions">
+                    <option value="2024-02-01" />
+                    <option value="2024-05-01-preview" />
+                    <option value="2024-08-01-preview" />
+                    <option value="2024-10-01-preview" />
+                    <option value="2025-01-01-preview" />
+                    <option value="2025-03-01-preview" />
+                    <option value="2025-04-01-preview" />
+                  </datalist>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Type any version or pick from suggestions. Latest stable: 2024-02-01.
+                  </p>
+                </div>
+              </>
+            )}
             <div>
               <Label>Mode</Label>
               <div className="flex gap-3 mt-1">

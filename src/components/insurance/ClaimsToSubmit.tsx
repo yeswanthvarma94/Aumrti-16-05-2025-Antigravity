@@ -4,11 +4,13 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Send, Bot, Package, AlertTriangle, Plus } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Send, Bot, Package, AlertTriangle, Plus, Sparkles, Loader2, Download, CheckCircle2 } from "lucide-react";
 import DenialPredictorPanel from "@/components/insurance/DenialPredictorPanel";
 import ClaimBundleGenerator from "@/components/insurance/ClaimBundleGenerator";
 import ClaimsPackWizard from "@/components/insurance/ClaimsPackWizard";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useInsuranceSubmission, type ClaimSubmitData, type SubmissionMode } from "@/hooks/useInsuranceSubmission";
 
 interface ClaimRow {
   bill_id: string;
@@ -29,17 +31,29 @@ const ClaimsToSubmit: React.FC = () => {
   const [selectedForReview, setSelectedForReview] = useState<ClaimRow | null>(null);
   const [bundleFor, setBundleFor] = useState<ClaimRow | null>(null);
   const [hospitalId, setHospitalId] = useState<string>("");
+  const [planTier, setPlanTier] = useState<SubmissionMode>("manual");
   const [aiScores, setAiScores] = useState<Record<string, number>>({});
   const [highRiskConfirmed, setHighRiskConfirmed] = useState<Record<string, boolean>>({});
   const [showWizard, setShowWizard] = useState(false);
   const { toast } = useToast();
+
+  const submission = useInsuranceSubmission(hospitalId);
 
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     setLoading(true);
     const { data: userData } = await supabase.from("users").select("hospital_id").limit(1).maybeSingle();
-    if (userData?.hospital_id) setHospitalId(userData.hospital_id);
+    if (userData?.hospital_id) {
+      setHospitalId(userData.hospital_id);
+      // Load plan tier for submission mode gating
+      const { data: insSettings } = await (supabase as any)
+        .from("hospital_insurance_settings")
+        .select("plan_tier")
+        .eq("hospital_id", userData.hospital_id)
+        .maybeSingle();
+      if (insSettings?.plan_tier) setPlanTier(insSettings.plan_tier as SubmissionMode);
+    }
     // Get finalised bills for insurance patients that don't have claims yet
     const { data: bills } = await supabase
       .from("bills")
@@ -90,33 +104,22 @@ const ClaimsToSubmit: React.FC = () => {
     setLoading(false);
   };
 
-  const submitClaim = async (row: ClaimRow) => {
+  const handleSubmitClaim = async (row: ClaimRow) => {
     setSubmitting(row.bill_id);
-    const { data: userData } = await supabase.from("users").select("id, hospital_id").limit(1).maybeSingle();
-    if (!userData) { setSubmitting(null); return; }
-
-    const claimNumber = `CLM-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000 + 1000)}`;
-
-    const finalRiskScore = aiScores[row.bill_id] ?? row.denial_risk;
-    const { error } = await supabase.from("insurance_claims").insert({
-      hospital_id: userData.hospital_id,
-      bill_id: row.bill_id,
-      patient_id: row.patient_id,
-      tpa_name: row.tpa_name,
-      claim_number: claimNumber,
-      claimed_amount: row.total_amount,
-      status: "submitted",
-      submitted_at: new Date().toISOString(),
-      ai_denial_risk_score: finalRiskScore,
-      created_by: userData.id,
-    } as any);
-
-    if (!error) {
-      toast({ title: `Claim ${claimNumber} submitted ✓` });
-      loadData();
-    } else {
-      toast({ title: "Error submitting claim", variant: "destructive" });
-    }
+    const claimData: ClaimSubmitData = {
+      bill_id:      row.bill_id,
+      patient_id:   row.patient_id,
+      tpa_name:     row.tpa_name,
+      total_amount: row.total_amount,
+      denial_risk:  row.denial_risk,
+      patient_name: row.patient_name,
+      bill_number:  row.bill_number,
+      has_pre_auth: row.has_pre_auth,
+      admission_id: row.admission_id,
+      ai_score:     aiScores[row.bill_id],
+    };
+    const result = await submission.submitClaim(claimData, planTier);
+    if (result?.success) loadData();
     setSubmitting(null);
   };
 
@@ -166,7 +169,7 @@ const ClaimsToSubmit: React.FC = () => {
                 <TableCell>{riskBadge(r.denial_risk)}</TableCell>
                 <TableCell>
                   <div className="flex flex-col gap-1">
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 flex-wrap">
                       <Button size="sm" variant="outline" className="text-[11px] h-7 gap-1" onClick={() => setBundleFor(r)} disabled={!r.admission_id}>
                         <Package size={12} /> Bundle
                       </Button>
@@ -178,20 +181,71 @@ const ClaimsToSubmit: React.FC = () => {
                       >
                         <Bot size={12} /> {aiScores[r.bill_id] !== undefined ? `AI: ${aiScores[r.bill_id]}%` : "AI Review"}
                       </Button>
-                      <Button
-                        size="sm"
-                        className="text-[11px] h-7 gap-1"
-                        onClick={() => submitClaim(r)}
-                        disabled={
-                          submitting === r.bill_id ||
-                          aiScores[r.bill_id] === undefined ||
-                          (aiScores[r.bill_id] > 50 && !highRiskConfirmed[r.bill_id])
-                        }
-                        title={aiScores[r.bill_id] === undefined ? "Run AI Review first" : undefined}
-                      >
-                        <Send size={12} /> Submit
-                      </Button>
+
+                      {/* Plan A — Manual */}
+                      {planTier === "manual" && (
+                        <Button
+                          size="sm"
+                          className="text-[11px] h-7 gap-1"
+                          onClick={() => handleSubmitClaim(r)}
+                          disabled={
+                            submitting === r.bill_id ||
+                            submission.submitting ||
+                            aiScores[r.bill_id] === undefined ||
+                            (aiScores[r.bill_id] > 50 && !highRiskConfirmed[r.bill_id])
+                          }
+                          title={aiScores[r.bill_id] === undefined ? "Run AI Review first" : undefined}
+                        >
+                          {submitting === r.bill_id ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                          ✓ Submit
+                        </Button>
+                      )}
+
+                      {/* Plan B — AI Assisted */}
+                      {planTier === "ai_assisted" && (
+                        <Button
+                          size="sm"
+                          className="text-[11px] h-7 gap-1 bg-violet-600 hover:bg-violet-700"
+                          onClick={() => handleSubmitClaim(r)}
+                          disabled={
+                            submitting === r.bill_id ||
+                            submission.submitting ||
+                            aiScores[r.bill_id] === undefined ||
+                            (aiScores[r.bill_id] > 50 && !highRiskConfirmed[r.bill_id])
+                          }
+                        >
+                          {submitting === r.bill_id
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Sparkles size={12} />}
+                          📄 Generate Letter
+                        </Button>
+                      )}
+
+                      {/* Plan C — Automated */}
+                      {planTier === "automated" && (
+                        <Button
+                          size="sm"
+                          className="text-[11px] h-7 gap-1 bg-emerald-600 hover:bg-emerald-700"
+                          onClick={() => handleSubmitClaim(r)}
+                          disabled={
+                            submitting === r.bill_id ||
+                            submission.submitting ||
+                            aiScores[r.bill_id] === undefined ||
+                            (aiScores[r.bill_id] > 50 && !highRiskConfirmed[r.bill_id])
+                          }
+                        >
+                          {submitting === r.bill_id
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <Bot size={12} />}
+                          🤖 Auto-Submit
+                        </Button>
+                      )}
                     </div>
+
+                    {/* Inline progress / result for this row */}
+                    {submitting === r.bill_id && submission.progress && (
+                      <p className="text-[10px] text-primary animate-pulse">{submission.progress}</p>
+                    )}
                     {aiScores[r.bill_id] === undefined && (
                       <p className="text-[10px] text-amber-600 flex items-center gap-1">
                         <AlertTriangle size={10} /> Run AI Review before submitting
@@ -258,6 +312,46 @@ const ClaimsToSubmit: React.FC = () => {
         onClose={() => setShowWizard(false)}
         onCreated={() => { setShowWizard(false); loadData(); }}
       />
+
+      {/* ── AI Cover Letter Modal (Plan B) ── */}
+      <Dialog open={submission.coverLetter.open} onOpenChange={submission.closeCoverLetter}>
+        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles size={16} className="text-violet-600" />
+              AI-Generated Claim Cover Letter
+              {submission.coverLetter.claimData?.claimNumber && (
+                <span className="text-sm font-normal text-muted-foreground ml-1">
+                  — {submission.coverLetter.claimData.claimNumber}
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto">
+            <pre className="whitespace-pre-wrap text-xs font-mono bg-muted/50 rounded-lg p-4 leading-relaxed">
+              {submission.coverLetter.text}
+            </pre>
+          </div>
+          <div className="flex items-center gap-3 pt-3 border-t border-border">
+            <Button className="gap-1.5" onClick={submission.downloadCoverLetter}>
+              <Download size={14} /> Download Letter
+            </Button>
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={async () => {
+                await submission.confirmCoverLetterSubmitted();
+                loadData();
+              }}
+            >
+              <CheckCircle2 size={14} /> Mark as Submitted
+            </Button>
+            <p className="text-xs text-muted-foreground ml-auto">
+              Download, attach documents, email to TPA, then mark submitted.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

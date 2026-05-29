@@ -4,7 +4,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Bot, Loader2, FileText, AlertTriangle, Printer } from "lucide-react";
 import { printDocument, printHeader } from "@/lib/printUtils";
 import { supabase } from "@/integrations/supabase/client";
-import { callAI } from "@/lib/aiProvider";
 import { toast } from "sonner";
 import { logNABHEvidence } from "@/lib/nabh-evidence";
 import { logRecordAccess } from "@/lib/ims";
@@ -48,128 +47,78 @@ const DischargeSummaryGenerator: React.FC<Props> = ({ admissionId, hospitalId, b
     setSummary("");
 
     try {
-      // Gather admission + patient data
-      const { data: admission } = await supabase.from("admissions")
-        .select("*, patients(full_name, dob, gender, blood_group, allergies)")
-        .eq("id", admissionId).maybeSingle();
-
-      if (!admission) {
-        toast.error("Admission not found");
-        setGenerating(false);
-        return;
-      }
-
-      // Get ward/bed names
-      const [wardRes, bedRes] = await Promise.all([
-        supabase.from("wards").select("name").eq("id", admission.ward_id).maybeSingle(),
-        supabase.from("beds").select("bed_number").eq("id", admission.bed_id).maybeSingle(),
-      ]);
-
-      // Ward round notes as clinical notes
-      const { data: rounds } = await (supabase as any).from("ward_round_notes")
-        .select("subjective, objective, assessment, plan, created_at")
-        .eq("admission_id", admissionId)
-        .order("created_at", { ascending: false })
-        .limit(5);
-
-      const notesText = (rounds || []).map((r: any) =>
-        [r.subjective, r.objective, r.assessment, r.plan].filter(Boolean).join(" | ")
-      ).join("\n---\n") || "Not available";
-
-      // Lab results
-      const { data: labs } = await (supabase as any).from("lab_order_items")
-        .select("test_name, result, unit, normal_range_low, normal_range_high")
-        .eq("patient_id", admission.patient_id)
-        .gte("created_at", admission.admitted_at || "2000-01-01")
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      // Medications
-      const { data: meds } = await (supabase as any).from("ipd_medications")
-        .select("drug_name, dose, frequency, route")
-        .eq("admission_id", admissionId)
-        .eq("is_active", true);
-
-      // OT
-      const { data: ot } = await (supabase as any).from("ot_schedules")
-        .select("surgery_type, procedure_notes")
-        .eq("admission_id", admissionId)
-        .maybeSingle();
-
-      const patient = admission.patients as any;
-      const admittedDate = admission.admitted_at ? formatDateIST(admission.admitted_at) : "Unknown";
-      const los = admission.admitted_at
-        ? Math.ceil((Date.now() - new Date(admission.admitted_at).getTime()) / 86400000)
-        : 0;
-
-      const response = await callAI({
-        featureKey: "discharge_summary",
-        hospitalId,
-        prompt: `Generate a professional hospital discharge summary for an Indian hospital.
-
-PATIENT:
-Name: ${patient?.full_name || "Unknown"}
-Age/Gender: ${patient?.dob ? Math.floor((Date.now() - new Date(patient.dob).getTime()) / 31557600000) : "—"}yrs / ${patient?.gender || "—"}
-Blood Group: ${patient?.blood_group || "Not recorded"}
-Allergies: ${Array.isArray(patient?.allergies) ? patient.allergies.join(", ") : patient?.allergies || "NKDA"}
-
-ADMISSION:
-Date: ${admittedDate}
-Discharge: Today
-Ward: ${(wardRes?.data as any)?.name || "—"} | Bed: ${(bedRes?.data as any)?.bed_number || "—"}
-Diagnosis: ${admission.admitting_diagnosis || "As per treating doctor"}
-Length of Stay: ${los} days
-
-CLINICAL NOTES (most recent):
-${notesText}
-
-${ot ? `SURGICAL PROCEDURE: ${ot.surgery_type}\n${ot.procedure_notes ? "Notes: " + ot.procedure_notes.slice(0, 200) : ""}` : ""}
-
-KEY LAB RESULTS:
-${labs?.map((l: any) => `${l.test_name}: ${l.result} ${l.unit || ""}`).join(", ") || "Not available"}
-
-CURRENT MEDICATIONS:
-${meds?.map((m: any) => `${m.drug_name} ${m.dose} ${m.frequency}`).join("\n") || "None prescribed"}
-
-Write a professional discharge summary with these sections:
-1. Presenting Complaint & History
-2. Examination Findings
-3. Investigations
-4. Hospital Course & Treatment
-5. Discharge Condition
-6. Medications at Discharge
-7. Instructions to Patient
-8. Follow-up Plan
-
-Use formal medical language. Keep factual. Do not invent details not provided. Max 400 words.`,
-        maxTokens: 600,
+      const { data, error } = await supabase.functions.invoke("ai-discharge-summary", {
+        body: { admission_id: admissionId },
       });
 
-      if (response.error) {
-        toast.error(`AI unavailable: ${response.error}. Write summary manually in the text box.`);
-        setGenerating(false);
+      const errMsg: string | undefined = data?.error || error?.message;
+      if (errMsg) {
+        const isNoKey = errMsg.includes("No AI provider") || errMsg.includes("No API key");
+        toast.error(
+          isNoKey
+            ? "No AI provider configured. Go to Settings → API Hub to add an API key."
+            : `AI unavailable: ${errMsg}`,
+          { duration: 8000 }
+        );
         return;
       }
 
-      setSummary(response.text);
+      const s = data?.structured;
+      if (!s) {
+        toast.error("AI returned an empty response. Write the summary manually.");
+        return;
+      }
 
-      // Log to ai_feature_logs
-      await (supabase as any).from("ai_feature_logs").insert({
+      // Format structured JSON into readable plain-text for the summary textarea
+      const medsLines = Array.isArray(s.discharge_medications)
+        ? (s.discharge_medications as any[]).map((m) =>
+            `• ${m.drug || m.drug_name || ""}${m.dose ? " — " + m.dose : ""}${m.frequency ? " " + m.frequency : ""}${m.duration ? " × " + m.duration : ""}${m.instructions ? " (" + m.instructions + ")" : ""}`.trim()
+          ).join("\n")
+        : "";
+
+      const formatted = [
+        s.final_diagnosis   ? `FINAL DIAGNOSIS:\n${s.final_diagnosis}` : "",
+        Array.isArray(s.procedures_performed) && s.procedures_performed.length
+          ? `\nPROCEDURES PERFORMED:\n${(s.procedures_performed as string[]).map((p) => `• ${p}`).join("\n")}`
+          : "",
+        s.hospital_course   ? `\nHOSPITAL COURSE:\n${s.hospital_course}` : "",
+        medsLines           ? `\nDISCHARGE MEDICATIONS:\n${medsLines}` : "",
+        s.diet_instructions ? `\nDIET:\n${s.diet_instructions}` : "",
+        s.activity_restrictions ? `\nACTIVITY:\n${s.activity_restrictions}` : "",
+        Array.isArray(s.follow_up_appointments) && s.follow_up_appointments.length
+          ? `\nFOLLOW-UP:\n${(s.follow_up_appointments as string[]).map((f) => `• ${f}`).join("\n")}`
+          : "",
+        Array.isArray(s.red_flag_symptoms) && s.red_flag_symptoms.length
+          ? `\nWARNING SIGNS (return immediately if):\n${(s.red_flag_symptoms as string[]).map((r) => `• ${r}`).join("\n")}`
+          : "",
+        s.patient_friendly_summary ? `\nPATIENT INSTRUCTIONS:\n${s.patient_friendly_summary}` : "",
+      ].filter(Boolean).join("\n");
+
+      setSummary(formatted.trim());
+      toast.success("Discharge summary generated");
+
+      // Fire-and-forget audit log
+      (supabase as any).from("ai_feature_logs").insert({
         hospital_id: hospitalId,
         feature_key: "discharge_summary",
         module: "ipd",
-        patient_id: admission.patient_id,
         success: true,
-        input_summary: `Admission ${admissionId} | LOS: ${los}d`,
-        output_summary: `Generated ${response.text.length} chars`,
-        tokens_used: (response as any).tokens_used || null,
-      });
-    } catch (err) {
-      console.error("Discharge summary generation failed:", err);
-      toast.error("Failed to generate summary. Write manually.");
-    }
+        input_summary: `Admission ${admissionId}`,
+        output_summary: `Generated ${formatted.length} chars`,
+      }).then(() => {});
 
-    setGenerating(false);
+    } catch (err: any) {
+      const msg: string = err?.message || "Unknown error";
+      const isNetwork = msg === "Failed to fetch" || msg.toLowerCase().includes("networkerror") || msg.toLowerCase().includes("failed to fetch");
+      toast.error(
+        isNetwork
+          ? "Cannot reach the AI service. Ensure the ai-discharge-summary Edge Function is deployed and an API key is set in Settings → API Hub."
+          : `AI error: ${msg}`,
+        { duration: 10000 }
+      );
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const checkDischargeCompleteness = async (): Promise<string[]> => {
