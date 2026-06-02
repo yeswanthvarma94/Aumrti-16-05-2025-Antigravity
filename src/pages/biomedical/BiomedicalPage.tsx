@@ -11,6 +11,7 @@ import CalibrationTab from "@/components/biomedical/CalibrationTab";
 import BreakdownTab from "@/components/biomedical/BreakdownTab";
 import AlertsTab from "@/components/biomedical/AlertsTab";
 import ReportsTab from "@/components/biomedical/ReportsTab";
+import PredictiveMaintenanceSection from "@/components/biomedical/PredictiveMaintenanceSection";
 import AddEquipmentModal from "@/components/biomedical/AddEquipmentModal";
 import ReportBreakdownModal from "@/components/biomedical/ReportBreakdownModal";
 
@@ -91,6 +92,7 @@ const BiomedicalPage: React.FC = () => {
               <Badge variant="destructive" className="ml-1 text-[10px] px-1.5 py-0">{kpis.pmOverdue + kpis.amcExpiring}</Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="predictive">🤖 AI Predictive</TabsTrigger>
           <TabsTrigger value="reports">📊 Reports</TabsTrigger>
         </TabsList>
 
@@ -108,6 +110,9 @@ const BiomedicalPage: React.FC = () => {
         </TabsContent>
         <TabsContent value="alerts" className="flex-1 overflow-hidden m-0 px-5 pt-3">
           <AlertsTab key={refreshKey} onNavigate={setTab} />
+        </TabsContent>
+        <TabsContent value="predictive" className="flex-1 overflow-auto m-0 px-5 pt-3">
+          <PredictiveMaintenanceSection />
         </TabsContent>
         <TabsContent value="reports" className="flex-1 overflow-hidden m-0 px-5 pt-3">
           <ReportsTab key={refreshKey} />

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Video } from "lucide-react";
+import { Video, ChevronLeft, ChevronRight, CalendarDays, X, Search } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasActionAccess } from "@/lib/tabPermissions";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -28,6 +30,8 @@ interface Props {
   hospitalId: string | null;
   loading: boolean;
   onTokenCreated: () => void;
+  selectedDate?: string;
+  onDateChange?: (date: string) => void;
 }
 
 const statusOrder: Record<string, number> = {
@@ -65,10 +69,23 @@ function getWaitMinutes(createdAt: string): string {
  * TokenQueue component displays a list of OPD tokens, allowing filtering by department
  * and showing real-time updates and no-show predictions.
  */
-const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, hospitalId, loading, onTokenCreated }) => {
+const today = new Date().toISOString().split("T")[0];
+const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+
+function formatDateLabel(d: string): string {
+  if (d === today) return "Today";
+  if (d === yesterday) return "Yesterday";
+  return new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
+
+const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, hospitalId, loading, onTokenCreated, selectedDate = today, onDateChange }) => {
   const navigate = useNavigate();
+  const { permissions, role } = useHospitalContext();
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
+  const [doctors, setDoctors] = useState<{ id: string; full_name: string }[]>([]);
   const [activeDept, setActiveDept] = useState<string>("all");
+  const [activeDoctor, setActiveDoctor] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [showModal, setShowModal] = useState(false);
   const [predictions, setPredictions] = useState<Record<string, NoShowPrediction>>({});
   const [predictingIds, setPredictingIds] = useState<Set<string>>(new Set());
@@ -79,8 +96,13 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
 
   useEffect(() => {
     if (!hospitalId) return;
-    supabase.from("departments").select("id, name").eq("hospital_id", hospitalId).eq("is_active", true).order("name", { ascending: true })
-      .then(({ data }) => setDepartments(data || []));
+    Promise.all([
+      supabase.from("departments").select("id, name").eq("hospital_id", hospitalId).eq("is_active", true).order("name"),
+      supabase.from("users").select("id, full_name").eq("hospital_id", hospitalId).eq("role", "doctor").eq("is_active", true).order("full_name"),
+    ]).then(([{ data: deptData }, { data: docData }]) => {
+      setDepartments(deptData || []);
+      setDoctors(docData || []);
+    });
   }, [hospitalId]);
 
   // Run no-show predictions for waiting tokens
@@ -143,9 +165,37 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
   const filtered = useMemo(() => {
     let list = [...tokens];
     if (activeDept !== "all") list = list.filter((t) => t.department_id === activeDept);
+    if (activeDoctor !== "all") list = list.filter((t) => t.doctor_id === activeDoctor);
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter((t) =>
+        t.patient?.full_name?.toLowerCase().includes(q) ||
+        t.patient?.uhid?.toLowerCase().includes(q) ||
+        t.patient?.phone?.toLowerCase().includes(q) ||
+        t.token_number?.toLowerCase().includes(q) ||
+        t.token_prefix?.toLowerCase().includes(q) ||
+        t.doctor?.full_name?.toLowerCase().includes(q) ||
+        t.department?.name?.toLowerCase().includes(q)
+      );
+    }
     list.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
     return list;
-  }, [tokens, activeDept]);
+  }, [tokens, activeDept, activeDoctor, searchQuery]);
+
+  const hasActiveFilter = activeDept !== "all" || activeDoctor !== "all" || !!searchQuery.trim();
+
+  // Date navigation helpers
+  const goToPrevDay = () => {
+    const d = new Date(selectedDate + "T00:00:00");
+    d.setDate(d.getDate() - 1);
+    onDateChange?.(d.toISOString().split("T")[0]);
+  };
+  const goToNextDay = () => {
+    const d = new Date(selectedDate + "T00:00:00");
+    d.setDate(d.getDate() + 1);
+    if (d.toISOString().split("T")[0] <= today) onDateChange?.(d.toISOString().split("T")[0]);
+  };
+  const isToday = selectedDate === today;
 
   // Start or join a teleconsult session for the given token.
   // Marks the token as "called" so the workspace opens, then navigates to /telemedicine.
@@ -214,7 +264,6 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
   const waitingCount = tokens.filter((t) => t.status === "waiting").length;
   const inRoomCount = tokens.filter((t) => t.status === "in_consultation").length;
   const doneCount = tokens.filter((t) => t.status === "completed").length;
-  const today = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
   // No-show analytics
   const highRiskCount = Object.values(predictions).filter(p => p.risk_score >= 70).length;
@@ -222,31 +271,106 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
 
   return (
     <>
-      <div className="w-[280px] flex-shrink-0 bg-white border-r border-slate-200 flex flex-col h-full">
+      <div className="w-full bg-white border-r border-slate-200 flex flex-col h-full overflow-hidden">
         {/* Header */}
-        <div className="flex-shrink-0 p-3 border-b border-slate-100">
-          <div className="flex items-center justify-between">
+        <div className="flex-shrink-0 border-b border-slate-100">
+          {/* Title + date nav */}
+          <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">
             <span className="text-sm font-bold text-slate-900">OPD Queue</span>
-            <span className="text-xs text-slate-500">{today}</span>
+            <div className="flex items-center gap-1">
+              <button onClick={goToPrevDay} className="h-6 w-6 flex items-center justify-center rounded hover:bg-slate-100 text-slate-500">
+                <ChevronLeft size={14} />
+              </button>
+              <div className="flex items-center gap-1">
+                <CalendarDays size={12} className="text-slate-400" />
+                <label className="text-[11px] font-semibold text-slate-700 cursor-pointer">
+                  {formatDateLabel(selectedDate)}
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    max={today}
+                    onChange={(e) => onDateChange?.(e.target.value)}
+                    className="absolute opacity-0 w-0 h-0"
+                  />
+                </label>
+              </div>
+              <button
+                onClick={goToNextDay}
+                disabled={isToday}
+                className="h-6 w-6 flex items-center justify-center rounded hover:bg-slate-100 text-slate-500 disabled:opacity-30"
+              >
+                <ChevronRight size={14} />
+              </button>
+              {!isToday && (
+                <button onClick={() => onDateChange?.(today)} className="text-[10px] text-[#1A2F5A] font-semibold hover:underline ml-1">
+                  Today
+                </button>
+              )}
+            </div>
           </div>
-          <div className="mt-2">
+
+          {/* Search box */}
+          <div className="px-3 pb-1.5">
+            <div className="relative">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search name, UHID, phone, token…"
+                className="w-full h-7 pl-7 pr-7 text-[11px] border border-slate-200 rounded-md bg-slate-50 text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-[#1A2F5A]/40"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Filters: Department + Doctor */}
+          <div className="px-3 pb-2.5 space-y-1.5">
             <Select value={activeDept} onValueChange={setActiveDept}>
-              <SelectTrigger className="h-8 text-[11px] font-medium bg-slate-50 border-slate-200">
-                <SelectValue placeholder="Filter by Department" />
+              <SelectTrigger className="h-7 text-[11px] font-medium bg-slate-50 border-slate-200">
+                <SelectValue placeholder="All Departments" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all" className="text-[11px]">All Departments</SelectItem>
                 {departments.map((d) => (
-                  <SelectItem key={d.id} value={d.id} className="text-[11px]">
-                    {d.name}
-                  </SelectItem>
+                  <SelectItem key={d.id} value={d.id} className="text-[11px]">{d.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+
+            <div className="flex items-center gap-1.5">
+              <Select value={activeDoctor} onValueChange={setActiveDoctor}>
+                <SelectTrigger className="h-7 text-[11px] font-medium bg-slate-50 border-slate-200 flex-1">
+                  <SelectValue placeholder="All Doctors" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-[11px]">All Doctors</SelectItem>
+                  {doctors.map((d) => (
+                    <SelectItem key={d.id} value={d.id} className="text-[11px]">{d.full_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {hasActiveFilter && (
+                <button
+                  onClick={() => { setActiveDept("all"); setActiveDoctor("all"); setSearchQuery(""); }}
+                  className="h-7 w-7 flex items-center justify-center rounded border border-slate-200 hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+                  title="Clear all filters"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            {departments.length === 0 && (
+              <p className="text-[10px] text-slate-400">Add departments in <Link to="/settings/departments" className="text-[#1A2F5A] underline">Settings</Link></p>
+            )}
           </div>
-          {departments.length === 0 && (
-            <p className="text-[10px] text-slate-400 mt-1.5">Add departments in <Link to="/settings/departments" className="text-[#1A2F5A] underline">Settings</Link></p>
-          )}
         </div>
 
         {/* Stats bar */}
@@ -267,8 +391,8 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
                 icon="🏥"
                 title="No patients in queue"
                 description="Walk-in patients and appointments will appear here"
-                actionLabel="Register Walk-in"
-                onAction={() => setShowModal(true)}
+                actionLabel={hasActionAccess("opd", "register_walkin", permissions, role) ? "Register Walk-in" : undefined}
+                onAction={hasActionAccess("opd", "register_walkin", permissions, role) ? () => setShowModal(true) : undefined}
               />
             ) : filtered.map((token) => {
               const isSelected = token.id === selectedTokenId;
@@ -403,12 +527,14 @@ const TokenQueue: React.FC<Props> = ({ tokens, selectedTokenId, onSelectToken, h
               : "📢"}
             {callNextLoading ? "Calling…" : lastCalledToken ? `Called ${lastCalledToken} · Call Next` : "Call Next Patient"}
           </button>
-          <button
-            onClick={() => setShowModal(true)}
-            className="w-full h-10 bg-[#1A2F5A] text-white rounded-lg text-[13px] font-semibold hover:bg-[#152647] active:scale-[0.98] transition-all"
-          >
-            + Register Walk-in
-          </button>
+          {hasActionAccess("opd", "register_walkin", permissions, role) && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="w-full h-10 bg-[#1A2F5A] text-white rounded-lg text-[13px] font-semibold hover:bg-[#152647] active:scale-[0.98] transition-all"
+            >
+              + Register Walk-in
+            </button>
+          )}
         </div>
       </div>
 

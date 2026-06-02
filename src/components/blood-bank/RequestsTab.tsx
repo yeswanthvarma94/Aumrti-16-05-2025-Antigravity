@@ -162,6 +162,16 @@ const RequestsTab: React.FC<Props> = ({ showModal, onCloseModal, onRefresh }) =>
 
     if (!bill) return; // Bill doesn't exist yet — will be captured on auto-pull
 
+    const dedupeKey = `blood_bank:issue:${issue.id ?? unit.unit_number}`;
+    const { data: existingItem } = await supabase
+      .from("bill_line_items")
+      .select("id")
+      .eq("bill_id", bill.id)
+      .eq("source_dedupe_key", dedupeKey)
+      .maybeSingle();
+
+    if (existingItem) return; // Already billed — idempotency guard
+
     await supabase.from("bill_line_items").insert({
       hospital_id: hospitalId,
       bill_id: bill.id,
@@ -175,7 +185,16 @@ const RequestsTab: React.FC<Props> = ({ showModal, onCloseModal, onRefresh }) =>
       total_amount: fee + gst,
       hsn_code: "999316",
       source_module: "blood_bank",
+      source_record_id: issue.id ?? null,
+      source_dedupe_key: dedupeKey,
     });
+
+    // Mark blood_issues as billed
+    if (issue.id) {
+      await (supabase as any).from("blood_issues").update({
+        billing_status: "billed", bill_id: bill.id,
+      }).eq("id", issue.id);
+    }
 
     toast({ title: `Blood product charged: ₹${(fee + gst).toLocaleString("en-IN")}` });
 

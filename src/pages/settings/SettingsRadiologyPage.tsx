@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Plus, Search, ChevronDown, ChevronRight, Trash2, Shield } from "lucide-react";
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, Shield, Monitor, Loader2, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -41,7 +41,62 @@ const SettingsRadiologyPage: React.FC = () => {
   const [addStudyModalityType, setAddStudyModalityType] = useState("");
   const [studyForm, setStudyForm] = useState({ study_name: "", fee: "0" });
 
-  // PCPNDT compliance settings
+  // ── PACS configuration ─────────────────────────────────
+  const [pacsConfigId, setPacsConfigId]     = useState<string | null>(null);
+  const [pacsType, setPacsType]             = useState("none");
+  const [pacsName, setPacsName]             = useState("");
+  const [wadoUriRoot, setWadoUriRoot]       = useState("");
+  const [ohifViewerUrl, setOhifViewerUrl]   = useState("");
+  const [aeTitle, setAeTitle]               = useState("");
+  const [pacsSaving, setPacsSaving]         = useState(false);
+
+  useEffect(() => {
+    if (!hospitalId) return;
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("hospital_pacs_config")
+        .select("*")
+        .eq("hospital_id", hospitalId)
+        .maybeSingle();
+      if (data) {
+        setPacsConfigId(data.id);
+        setPacsType(data.pacs_type || "none");
+        setPacsName(data.pacs_name || "");
+        setWadoUriRoot(data.wado_uri_root || "");
+        setOhifViewerUrl(data.ohif_viewer_url || "");
+        setAeTitle(data.ae_title || "");
+      }
+    })();
+  }, [hospitalId]);
+
+  const savePacsConfig = async () => {
+    if (!hospitalId) return;
+    setPacsSaving(true);
+    const payload = {
+      hospital_id: hospitalId,
+      pacs_type: pacsType,
+      pacs_name: pacsName.trim() || null,
+      wado_uri_root: wadoUriRoot.trim() || null,
+      ohif_viewer_url: ohifViewerUrl.trim() || null,
+      ae_title: aeTitle.trim() || null,
+      is_active: pacsType !== "none",
+      updated_at: new Date().toISOString(),
+    };
+    let err: any;
+    if (pacsConfigId) {
+      const res = await (supabase as any).from("hospital_pacs_config").update(payload).eq("id", pacsConfigId);
+      err = res.error;
+    } else {
+      const res = await (supabase as any).from("hospital_pacs_config").insert(payload).select("id").maybeSingle();
+      err = res.error;
+      if (!err && res.data) setPacsConfigId(res.data.id);
+    }
+    setPacsSaving(false);
+    if (err) toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    else toast({ title: "PACS configuration saved ✓" });
+  };
+
+  // ── PCPNDT compliance settings ───────────────────────
   const [pcpndtMachineName, setPcpndtMachineName] = useState("");
   const [pcpndtMachineReg, setPcpndtMachineReg] = useState("");
   const [pcpndtDoctorReg, setPcpndtDoctorReg] = useState("");
@@ -327,6 +382,121 @@ const SettingsRadiologyPage: React.FC = () => {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* ── PACS / DICOM Viewer Configuration ── */}
+      <div className="mt-6 border border-border rounded-lg overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 bg-blue-50 border-b border-border">
+          <Monitor size={15} className="text-blue-700" />
+          <h3 className="text-sm font-bold text-blue-900">PACS & DICOM Viewer</h3>
+          {pacsType !== "none" && (
+            <span className="ml-auto text-[11px] text-blue-700 bg-blue-100 px-2 py-0.5 rounded font-medium">
+              {pacsName || pacsType.toUpperCase()} active
+            </span>
+          )}
+        </div>
+        <div className="p-4 space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Configure your hospital's PACS system. When set, radiologists can open studies directly in
+            the PACS viewer from the Radiology workspace. DICOM file upload works independently of PACS.
+          </p>
+
+          {/* PACS type selector */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-xs font-medium">PACS / Viewer Type</Label>
+              <select
+                value={pacsType}
+                onChange={e => setPacsType(e.target.value)}
+                className="mt-1 w-full h-9 text-sm border border-border rounded-md px-2 bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="none">None (upload-only mode)</option>
+                <option value="ohif">OHIF Viewer (self-hosted)</option>
+                <option value="wado_uri">WADO-URI (any DICOM-compliant PACS)</option>
+                <option value="wado_rs">WADO-RS / DICOMweb</option>
+                <option value="custom">Custom URL</option>
+              </select>
+            </div>
+            <div>
+              <Label className="text-xs font-medium">PACS Display Name</Label>
+              <Input
+                value={pacsName}
+                onChange={e => setPacsName(e.target.value)}
+                placeholder="e.g. Synapse PACS, Orthanc"
+                className="mt-1 h-9"
+              />
+            </div>
+          </div>
+
+          {pacsType !== "none" && (
+            <div className="space-y-3 bg-muted/40 rounded-lg p-3">
+              {(pacsType === "ohif" || pacsType === "custom") && (
+                <div>
+                  <Label className="text-xs font-medium">OHIF / Viewer Base URL</Label>
+                  <div className="flex gap-2 mt-1">
+                    <Input
+                      value={ohifViewerUrl}
+                      onChange={e => setOhifViewerUrl(e.target.value)}
+                      placeholder="https://ohif.yourhospital.com/viewer"
+                      className="h-9 flex-1 font-mono text-xs"
+                    />
+                    {ohifViewerUrl && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9"
+                        onClick={() => window.open(ohifViewerUrl, "_blank", "noopener,noreferrer")}
+                      >
+                        <ExternalLink size={13} />
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Study UID will be appended automatically: {ohifViewerUrl || "https://…/viewer"}?StudyInstanceUIDs=…
+                  </p>
+                </div>
+              )}
+
+              {(pacsType === "wado_uri" || pacsType === "wado_rs") && (
+                <div>
+                  <Label className="text-xs font-medium">WADO-URI Root URL</Label>
+                  <Input
+                    value={wadoUriRoot}
+                    onChange={e => setWadoUriRoot(e.target.value)}
+                    placeholder="https://pacs.yourhospital.com/wado"
+                    className="mt-1 h-9 font-mono text-xs"
+                  />
+                </div>
+              )}
+
+              <div>
+                <Label className="text-xs font-medium">AE Title (optional)</Label>
+                <Input
+                  value={aeTitle}
+                  onChange={e => setAeTitle(e.target.value)}
+                  placeholder="e.g. HOSPITAL_PACS"
+                  className="mt-1 h-9 font-mono text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Info box */}
+          {pacsType === "none" && (
+            <div className="bg-slate-50 border border-slate-200 rounded p-3 text-[12px] text-slate-600">
+              <p className="font-medium text-slate-700 mb-1">Running without PACS?</p>
+              <p>
+                Radiologists can upload DICOM files directly from the Radiology workspace.
+                JPEG-compressed files (X-ray, USG, Mammography) render in the browser.
+                For CT/MRI, files are stored and downloadable for viewing in RadiAnt, Horos, or MicroDicom.
+              </p>
+            </div>
+          )}
+
+          <Button size="sm" onClick={savePacsConfig} disabled={pacsSaving} className="h-8 text-xs gap-1">
+            {pacsSaving ? <><Loader2 size={12} className="animate-spin" /> Saving...</> : "Save PACS Settings"}
+          </Button>
         </div>
       </div>
 

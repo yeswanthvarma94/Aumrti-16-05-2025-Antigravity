@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Plus, Clock, ChevronDown, ChevronUp, FlaskConical } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasActionAccess } from "@/lib/tabPermissions";
 
 interface PendingOpdLabOrder {
   prescriptionId: string;
@@ -94,12 +96,13 @@ const LabQueuePanel: React.FC<Props> = ({
   statCount, urgentCount, routineCount, onNewOrder,
   pendingOpdOrders = [], onCreateFromOpd,
 }) => {
+  const { permissions, role } = useHospitalContext();
   const [opdExpanded, setOpdExpanded] = useState(true);
   const today = new Date().toISOString().split("T")[0];
   const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
 
   return (
-    <div className="w-[280px] shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
+    <div className="w-full bg-card border-r border-border flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
@@ -286,14 +289,16 @@ const LabQueuePanel: React.FC<Props> = ({
       </div>
 
       {/* Footer */}
-      <div className="p-3 border-t border-border shrink-0">
-        <button
-          onClick={onNewOrder}
-          className="w-full h-10 rounded-lg bg-[hsl(var(--sidebar-background))] text-white text-[13px] font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition-all"
-        >
-          <Plus size={16} /> New Lab Order
-        </button>
-      </div>
+      {hasActionAccess("lab", "new_lab_order", permissions, role) && (
+        <div className="p-3 border-t border-border shrink-0">
+          <button
+            onClick={onNewOrder}
+            className="w-full h-10 rounded-lg bg-[hsl(var(--sidebar-background))] text-white text-[13px] font-semibold flex items-center justify-center gap-2 hover:opacity-90 active:scale-[0.98] transition-all"
+          >
+            <Plus size={16} /> New Lab Order
+          </button>
+        </div>
+      )}
     </div>
   );
 };

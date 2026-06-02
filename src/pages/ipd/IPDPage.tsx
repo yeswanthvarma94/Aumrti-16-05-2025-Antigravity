@@ -6,8 +6,9 @@ import BedMap from "@/components/ipd/BedMap";
 import IPDWorkspace from "@/components/ipd/IPDWorkspace";
 import WardStats from "@/components/ipd/WardStats";
 import AdmitPatientModal from "@/components/ipd/AdmitPatientModal";
-import BedForecastCard from "@/components/ipd/BedForecastCard";
+import BedDemandForecastPanel from "@/components/ipd/BedDemandForecastPanel";
 import { useHospitalContext } from "@/contexts/HospitalContext";
+import CollapsiblePanel from "@/components/layout/CollapsiblePanel";
 
 export interface BedData {
   id: string;
@@ -25,6 +26,7 @@ export interface BedData {
     admission_number: string;
     admitting_diagnosis: string;
     doctor_name: string;
+    doctor_department: string | null;
     los_days: number;
     expected_discharge_date: string | null;
     is_mlc?: boolean;
@@ -54,7 +56,6 @@ const IPDPage: React.FC = () => {
   const [selectedBedId, setSelectedBedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [admitModal, setAdmitModal] = useState<{ open: boolean; bedId?: string; wardId?: string; bedNumber?: string }>({ open: false });
-  const [showWardStats, setShowWardStats] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (!hospitalId) return;
@@ -68,7 +69,7 @@ const IPDPage: React.FC = () => {
         .order("bed_number"),
       supabase
         .from("admissions")
-        .select("id, patient_id, bed_id, ward_id, admission_type, admission_number, admitting_diagnosis, admitted_at, expected_discharge_date, admitting_doctor_id, status, is_mlc, mlc_number, payer_type, patient:patients(full_name, abha_id), bed:beds(bed_number), ward:wards(name), doctor:users!admissions_admitting_doctor_id_fkey(full_name)")
+        .select("id, patient_id, bed_id, ward_id, admission_type, admission_number, admitting_diagnosis, admitted_at, expected_discharge_date, admitting_doctor_id, status, is_mlc, mlc_number, payer_type, patient:patients(full_name, abha_id), bed:beds(bed_number), ward:wards(name), doctor:users!admissions_admitting_doctor_id_fkey(full_name, department:departments(name))")
         .eq("hospital_id", hospitalId)
         .eq("status", "active")
         .order("admitted_at", { ascending: false }),
@@ -93,7 +94,7 @@ const IPDPage: React.FC = () => {
       const patient = a.patient as { full_name: string } | null;
       const bed = a.bed as { bed_number: string } | null;
       const ward = a.ward as { name: string } | null;
-      const doctor = a.doctor as { full_name: string } | null;
+      const doctor = a.doctor as { full_name: string; department?: { name: string } | null } | null;
       const name = patient?.full_name || "—";
       const initials = name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
       const los = Math.max(1, Math.ceil((Date.now() - new Date(a.admitted_at as string).getTime()) / 86400000));
@@ -108,6 +109,7 @@ const IPDPage: React.FC = () => {
         admission_number: a.admission_number as string || "",
         admitting_diagnosis: a.admitting_diagnosis as string || "",
         doctor_name: doctor?.full_name || "—",
+        doctor_department: doctor?.department?.name || null,
         los_days: los,
         expected_discharge_date: a.expected_discharge_date as string | null,
         is_mlc: (a.is_mlc as boolean) || false,
@@ -190,13 +192,15 @@ const IPDPage: React.FC = () => {
       {(!isMobile || !selectedBedId) && (
         <div className="flex flex-col flex-1 overflow-hidden">
           {hospitalId && totalBeds > 0 && (
-            <div className="flex-shrink-0 p-3 border-b border-border">
-              <BedForecastCard hospitalId={hospitalId} totalBeds={totalBeds} currentOccupancy={occupiedBeds} />
+            <div className="flex-shrink-0 p-3 border-b border-border space-y-2">
+              <BedDemandForecastPanel hospitalId={hospitalId} />
             </div>
           )}
           <div className="flex flex-row flex-1 overflow-hidden">
-            <BedMap beds={beds} selectedBedId={selectedBedId} onSelectBed={handleBedSelect}
-              hospitalId={hospitalId} loading={loading} onRefresh={fetchData} onNewAdmission={handleNewAdmission} />
+            <CollapsiblePanel panelKey="ipd_bedmap" title="Bed Map" side="left" expandedWidth="w-[300px]">
+              <BedMap beds={beds} selectedBedId={selectedBedId} onSelectBed={handleBedSelect}
+                hospitalId={hospitalId} loading={loading} onRefresh={fetchData} onNewAdmission={handleNewAdmission} />
+            </CollapsiblePanel>
             {/* Desktop: workspace beside bed map */}
             {!isMobile && (
               <IPDWorkspace bed={selectedBed} hospitalId={hospitalId} userId={userId} onRefresh={fetchData} />
@@ -218,23 +222,18 @@ const IPDPage: React.FC = () => {
         </div>
       )}
 
-      {/* Ward stats toggle — desktop only */}
-      {!isMobile && (showWardStats ? (
-        <WardStats admissions={admissions} onSelectBed={setSelectedBedId} onClose={() => setShowWardStats(false)} />
-      ) : (
-        <button
-          onClick={() => setShowWardStats(true)}
-          className="flex-shrink-0 w-8 bg-white border-l border-slate-200 flex flex-col items-center justify-start pt-4 hover:bg-slate-50 transition-colors"
-          title="Show Currently Admitted"
+      {/* Ward stats — collapsible right panel, desktop only */}
+      {!isMobile && (
+        <CollapsiblePanel
+          panelKey="ipd_wardstats"
+          title={`Currently Admitted (${admissions.length})`}
+          side="right"
+          expandedWidth="w-[260px]"
+          defaultCollapsed={false}
         >
-          <span
-            className="text-[10px] font-bold text-slate-400 uppercase tracking-wider"
-            style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
-          >
-            Currently Admitted ({admissions.length})
-          </span>
-        </button>
-      ))}
+          <WardStats admissions={admissions} onSelectBed={setSelectedBedId} onClose={() => {}} />
+        </CollapsiblePanel>
+      )}
 
       <AdmitPatientModal
         open={admitModal.open}

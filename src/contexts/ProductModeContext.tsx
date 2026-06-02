@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useHospitalContext } from "./HospitalContext";
 
@@ -22,6 +23,7 @@ const CACHE_PREFIX = "hms_pmode_";
 
 export const ProductModeProvider = ({ children }: { children: React.ReactNode }) => {
   const { hospitalId, loading: ctxLoading } = useHospitalContext();
+  const queryClient = useQueryClient();
   const [productMode, setProductMode] = useState("hospital");
   const [enabledModules, setEnabledModules] = useState<string[] | null>(null);
   const [loadingMode, setLoadingMode] = useState(true);
@@ -56,6 +58,50 @@ export const ProductModeProvider = ({ children }: { children: React.ReactNode })
     if (!hospitalId) { setLoadingMode(false); return; }
     fetchMode(hospitalId);
   }, [hospitalId, ctxLoading]);
+
+  // Real-time sync: propagate Platform admin changes to HMS immediately.
+  // Listens for:
+  //  - product_modes changes → clear cache + refetch product mode
+  //  - hospital_feature_overrides / hospital_subscriptions / plan_features changes
+  //    → invalidate subscription-config query (used by MG gate)
+  useEffect(() => {
+    if (!hospitalId) return;
+
+    const channel = supabase
+      .channel(`platform_hms_sync_${hospitalId}`)
+      .on(
+        "postgres_changes" as any,
+        { event: "*", schema: "public", table: "product_modes", filter: `hospital_id=eq.${hospitalId}` },
+        () => {
+          try { sessionStorage.removeItem(CACHE_PREFIX + hospitalId); } catch { /* ignore */ }
+          fetchMode(hospitalId);
+        }
+      )
+      .on(
+        "postgres_changes" as any,
+        { event: "*", schema: "public", table: "hospital_feature_overrides", filter: `hospital_id=eq.${hospitalId}` },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["subscription-config", hospitalId] });
+        }
+      )
+      .on(
+        "postgres_changes" as any,
+        { event: "*", schema: "public", table: "hospital_subscriptions", filter: `hospital_id=eq.${hospitalId}` },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["subscription-config", hospitalId] });
+        }
+      )
+      .on(
+        "postgres_changes" as any,
+        { event: "*", schema: "public", table: "plan_features" },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["subscription-config", hospitalId] });
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [hospitalId, queryClient]);
 
   const refreshMode = () => {
     if (!hospitalId) return;

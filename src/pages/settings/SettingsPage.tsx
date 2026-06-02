@@ -75,6 +75,7 @@ const settingsGroups: SettingsGroup[] = [
       { icon: Clock, title: "Shifts", desc: "Define shift timings and patterns", route: "/settings/shifts" },
       { icon: ToggleLeft, title: "Modules On/Off", desc: "Enable or disable system modules", route: "/settings/modules" },
       { icon: Landmark, title: "Bank Accounts", desc: "Configure bank accounts for reconciliation", route: "/settings/bank-accounts" },
+      { icon: ListChecks, title: "Configurable Dropdowns", desc: "Customise every dropdown in the system — admission types, drug routes, leave types, TPA list, lab categories and more", route: "/settings/config-values" },
     ],
   },
   {

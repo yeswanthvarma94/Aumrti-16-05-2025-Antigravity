@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { syncAdvanceToBill } from "@/lib/advanceBillSync";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,9 +13,10 @@ interface Props {
   onCreated: () => void;
   prefilledPatient?: { id: string; full_name: string; uhid: string } | null;
   prefilledAmount?: number;
+  admissionId?: string | null;
 }
 
-const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, prefilledPatient, prefilledAmount }) => {
+const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, prefilledPatient, prefilledAmount, admissionId }) => {
   const { toast } = useToast();
   const [patientSearch, setPatientSearch] = useState("");
   const [patients, setPatients] = useState<any[]>([]);
@@ -72,6 +74,30 @@ const AdvanceReceiptModal: React.FC<Props> = ({ hospitalId, onClose, onCreated, 
     if (error) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
+      // Mirror deposit into ipd_advances (Advance tab) + sync to bill_payments (billing/analytics)
+      if (admissionId) {
+        await (supabase as any).from("ipd_advances").insert({
+          hospital_id:      hospitalId,
+          admission_id:     admissionId,
+          patient_id:       selectedPatient.id,
+          amount:           Number(amount),
+          transaction_type: "deposit",
+          payment_mode:     paymentMode,
+          reference_no:     `ADV-${dateStr}-${seq}`,
+          description:      notes || "Advance deposit",
+          collected_by:     userData?.id || null,
+        });
+        // Sync to bill_payments so billing, analytics and dashboard reflect the receipt
+        await syncAdvanceToBill({
+          admissionId,
+          hospitalId,
+          amount:      Number(amount),
+          paymentMode,
+          userId:      userData?.id ?? null,
+          referenceNo: `ADV-${dateStr}-${seq}`,
+          notes:       notes || "Advance deposit",
+        });
+      }
       toast({ title: `Advance of ₹${Number(amount).toLocaleString("en-IN")} received from ${selectedPatient.full_name}` });
       onCreated();
     }

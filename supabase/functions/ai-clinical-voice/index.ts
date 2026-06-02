@@ -38,23 +38,54 @@ If a field cannot be extracted, use empty string or empty array.
 Prescription array should only include items clearly mentioned.
 confidence should be 0-1 based on transcript clarity.`,
 
-  ward_round: `You are a clinical documentation AI for an Indian hospital. A doctor dictated the following during an IPD ward round.
+  ward_round: `You are a senior clinical documentation AI for an Indian hospital IPD ward round. The doctor's dictation may use a mix of English and an Indian language. Parse carefully.
 
-Return ONLY a JSON object:
+IMPORTANT ABBREVIATIONS (Indian clinical shorthand):
+- S/O = Subjective/Objective, SOAP = clinical note format
+- BD/BID = twice daily, TDS = three times daily, QID = four times, OD = once daily, HS = night, SOS = as needed, STAT = immediately, AC = before meals, PC = after meals
+- C/O = complaining of, H/O = history of, K/C/O = known case of
+- BP = blood pressure (format: systolic/diastolic e.g. 120/80), PR/HR = pulse rate, RR = respiratory rate, SpO2/O2 sat = oxygen saturation, Temp = temperature
+- Afebrile = no fever, Tachycardia/bradycardia = fast/slow pulse, Hypo/hypertension = low/high BP
+- NBM = nil by mouth, NPO = nothing per oral, IV = intravenous, IM = intramuscular, PO = oral
+- FBS/RBS/PPBS = fasting/random/post-prandial blood sugar, HbA1c = glycated haemoglobin
+- USG = ultrasound, CECT = contrast CT, HRCT = high resolution CT, 2D Echo = echocardiogram
+- Tab = tablet, Cap = capsule, Inj = injection, Syp = syrup, Oint = ointment, Susp = suspension
+
+VITALS: Extract numeric values separately. If doctor says "BP 130 by 80" → bp_sys:130, bp_dia:80. Temperature in °F unless stated otherwise.
+
+Return ONLY a valid JSON object — no markdown, no explanation:
 {
-  "subjective": "patient's complaints today",
-  "objective": "vitals and examination today",
-  "assessment": "clinical assessment / diagnosis status",
-  "plan": "today's management plan",
+  "subjective": "patient's complaints, symptoms today in 1-3 sentences",
+  "objective": "general examination findings and clinical status (NOT vitals — those go in vitals_detected)",
+  "assessment": "diagnosis status, clinical impression for today",
+  "plan": "management plan for the day — medications, nursing, activity, diet, follow-up investigations",
+  "vitals_detected": {
+    "bp_sys": "",
+    "bp_dia": "",
+    "pulse": "",
+    "temp": "",
+    "spo2": "",
+    "rr": "",
+    "pain_score": ""
+  },
   "medication_changes": [
-    { "action": "add/stop/change", "drug": "", "note": "" }
+    { "action": "add", "drug": "drug name dose route frequency duration", "note": "reason if mentioned" },
+    { "action": "stop", "drug": "drug name", "note": "reason" },
+    { "action": "change", "drug": "old → new", "note": "what changed" }
   ],
-  "investigations_ordered": ["test 1", "test 2"],
-  "consultant_to_call": "",
-  "discharge_plan": "if discharge being planned",
+  "investigations_ordered": ["exact test name as would appear on lab requisition"],
+  "consultant_to_call": "specialty and doctor name if referral mentioned",
+  "discharge_plan": "expected discharge date or criteria if mentioned, else empty string",
   "confidence": 0.85,
-  "reasoning": "One sentence explaining the confidence level and key structuring decisions"
-}`,
+  "reasoning": "One sentence: key clinical decisions in this dictation and any ambiguities"
+}
+
+Rules:
+- vitals_detected: use numeric strings only (e.g. "120", "80", "98.6"). Leave empty string if not clearly stated.
+- investigations_ordered: use exact Indian lab names (e.g. "CBC", "LFT", "KFT", "HbA1c", "Urine R/M", "Blood Culture & Sensitivity")
+- medication_changes: only include explicitly mentioned changes, not routine medications continuing unchanged
+- If the doctor says patient is "better", "improving", "stable" — capture in subjective/assessment
+- If confidence < 0.6, add a note in reasoning about what was unclear`,
 
   emergency: `You are a clinical documentation AI. This is an emergency department case.
 Extract vitals as numbers. Split history into AMPLE categories (Allergies, Medications, Past history, Last meal, Events) when possible.

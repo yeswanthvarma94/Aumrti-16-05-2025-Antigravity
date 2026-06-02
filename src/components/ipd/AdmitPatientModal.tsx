@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { AlertTriangle, Info } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { logAudit } from "@/lib/auditLog";
+import { useConfigValues } from "@/hooks/useConfigValues";
 import { generateBillNumber } from "@/hooks/useBillNumber";
 import { printAdmissionSlip } from "@/lib/admissionSlip";
 import AdvanceReceiptModal from "@/components/billing/AdvanceReceiptModal";
@@ -41,8 +42,6 @@ interface PatientResult {
   patient_category?: string | null;
 }
 
-const admissionTypes = ["elective", "emergency", "transfer", "daycare"] as const;
-const insuranceTypes = ["self_pay", "insurance", "pmjay", "cghs", "echs"] as const;
 
 const AdmitPatientModal: React.FC<Props> = ({
   open, onClose, hospitalId,
@@ -59,6 +58,9 @@ const AdmitPatientModal: React.FC<Props> = ({
   const [searching, setSearching] = useState(false);
   const [searchedTerm, setSearchedTerm] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<PatientResult | null>(null);
+
+  const admissionTypeOptions = useConfigValues("admission_types");
+  const insuranceTypeOptions = useConfigValues("insurance_types");
 
   // Step 2 fields
   const [admissionType, setAdmissionType] = useState<string>("elective");
@@ -101,6 +103,22 @@ const AdmitPatientModal: React.FC<Props> = ({
   const [newPhone, setNewPhone] = useState("");
   const [newAge, setNewAge] = useState("");
   const [newGender, setNewGender] = useState("male");
+
+  // MUST Nutritional Screening (NABH AAC requirement)
+  const [mustBmi, setMustBmi] = useState("");
+  const [mustWeightLoss, setMustWeightLoss] = useState("");
+  const [mustAcuteDisease, setMustAcuteDisease] = useState(false);
+  const mustScore = (() => {
+    let score = 0;
+    const bmi = parseFloat(mustBmi);
+    const wl = parseFloat(mustWeightLoss);
+    if (!isNaN(bmi)) { if (bmi < 18.5) score += 2; else if (bmi < 20) score += 1; }
+    if (!isNaN(wl)) { if (wl > 10) score += 2; else if (wl >= 5) score += 1; }
+    if (mustAcuteDisease) score += 2;
+    return score;
+  })();
+  const mustRisk = mustScore === 0 ? "Low" : mustScore === 1 ? "Medium" : "High";
+  const mustRiskColor = mustScore === 0 ? "text-emerald-600" : mustScore === 1 ? "text-amber-600" : "text-red-600";
 
   // Step 3: Deposit & Estimate
   const [estimatedDays, setEstimatedDays] = useState(3);
@@ -297,6 +315,11 @@ const AdmitPatientModal: React.FC<Props> = ({
       police_informed_at: isMlcAdm ? new Date().toISOString() : null,
       payer_type: payerType,
       payer_id: payerId || null,
+      must_score: (mustBmi || mustWeightLoss || mustAcuteDisease) ? mustScore : null,
+      must_bmi: mustBmi ? parseFloat(mustBmi) : null,
+      must_weight_loss_pct: mustWeightLoss ? parseFloat(mustWeightLoss) : null,
+      must_acute_disease: mustAcuteDisease || false,
+      must_assessed_at: (mustBmi || mustWeightLoss) ? new Date().toISOString() : null,
     } as any);
 
     if (error) {
@@ -544,11 +567,11 @@ const AdmitPatientModal: React.FC<Props> = ({
               <div>
                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wider block mb-1">Admission Type</label>
                 <div className="flex gap-1.5">
-                  {admissionTypes.map((t) => (
-                    <button key={t} onClick={() => setAdmissionType(t)}
-                      className={cn("flex-1 h-9 rounded-md text-xs font-medium border capitalize transition-colors",
-                        admissionType === t ? "bg-[#1A2F5A] text-white border-[#1A2F5A]" : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}>{t}</button>
+                  {admissionTypeOptions.map((opt) => (
+                    <button key={opt.value} onClick={() => setAdmissionType(opt.value)}
+                      className={cn("flex-1 h-9 rounded-md text-xs font-medium border transition-colors",
+                        admissionType === opt.value ? "bg-[#1A2F5A] text-white border-[#1A2F5A]" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      )}>{opt.label}</button>
                   ))}
                 </div>
               </div>
@@ -607,11 +630,11 @@ const AdmitPatientModal: React.FC<Props> = ({
               <div>
                 <label className="text-xs font-bold text-slate-600 block mb-1">Insurance</label>
                 <div className="flex gap-1 flex-wrap">
-                  {insuranceTypes.map((t) => (
-                    <button key={t} onClick={() => setInsuranceType(t)}
-                      className={cn("h-8 px-3 rounded-md text-[11px] font-medium border capitalize transition-colors",
-                        insuranceType === t ? "bg-[#1A2F5A] text-white border-[#1A2F5A]" : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                      )}>{t.replace("_", " ")}</button>
+                  {insuranceTypeOptions.map((opt) => (
+                    <button key={opt.value} onClick={() => setInsuranceType(opt.value)}
+                      className={cn("h-8 px-3 rounded-md text-[11px] font-medium border transition-colors",
+                        insuranceType === opt.value ? "bg-[#1A2F5A] text-white border-[#1A2F5A]" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      )}>{opt.label}</button>
                   ))}
                 </div>
                 {insuranceType !== "self_pay" && (
@@ -800,6 +823,44 @@ const AdmitPatientModal: React.FC<Props> = ({
                 </div>
               )}
 
+              {/* MUST Nutritional Screening — NABH AAC requirement */}
+              {!estimateOnlyMode && (
+                <div className="border rounded-lg p-3 bg-muted/30 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-foreground">Nutritional Screening (MUST)</span>
+                    <span className="text-[10px] bg-blue-100 text-blue-700 border border-blue-200 rounded px-1.5 py-px font-medium">NABH AAC</span>
+                    {(mustBmi || mustWeightLoss || mustAcuteDisease) && (
+                      <span className={`text-[11px] font-bold ml-auto ${mustRiskColor}`}>
+                        Score: {mustScore} — {mustRisk} Risk
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[11px] text-muted-foreground block mb-1">BMI (kg/m²)</label>
+                      <input type="number" step="0.1" min="10" max="60" value={mustBmi}
+                        onChange={e => setMustBmi(e.target.value)}
+                        placeholder="e.g. 21.5"
+                        className="w-full h-7 text-xs border border-input rounded px-2 bg-background" />
+                      <p className="text-[9px] text-muted-foreground mt-0.5">0pts ≥20, 1pt 18.5–20, 2pts &lt;18.5</p>
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-muted-foreground block mb-1">Recent Weight Loss (%)</label>
+                      <input type="number" step="0.1" min="0" max="50" value={mustWeightLoss}
+                        onChange={e => setMustWeightLoss(e.target.value)}
+                        placeholder="e.g. 7"
+                        className="w-full h-7 text-xs border border-input rounded px-2 bg-background" />
+                      <p className="text-[9px] text-muted-foreground mt-0.5">0pts &lt;5%, 1pt 5–10%, 2pts &gt;10%</p>
+                    </div>
+                    <div className="flex items-center gap-2 pt-4">
+                      <input type="checkbox" id="must_acute" checked={mustAcuteDisease}
+                        onChange={e => setMustAcuteDisease(e.target.checked)} className="h-4 w-4" />
+                      <label htmlFor="must_acute" className="text-xs">Acute illness / nil by mouth ≥5 days (+2 pts)</label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-between pt-2">
                 {estimateOnlyMode ? (
                   <>
@@ -835,6 +896,10 @@ const AdmitPatientModal: React.FC<Props> = ({
                 {expectedDischarge && <Row label="Expected Discharge" value={expectedDischarge} />}
                 {estimatedAmount && <Row label="Estimated Amount" value={`₹${Number(estimatedAmount).toLocaleString("en-IN")}`} />}
                 {depositRequired && <Row label="Deposit Required" value={`₹${Number(depositRequired).toLocaleString("en-IN")}`} />}
+                {(mustBmi || mustWeightLoss || mustAcuteDisease) && (
+                  <Row label="MUST Nutritional Risk"
+                    value={`Score ${mustScore} — ${mustRisk} Risk`} />
+                )}
               </div>
 
               <div className="flex justify-between pt-2">
@@ -854,6 +919,7 @@ const AdmitPatientModal: React.FC<Props> = ({
           hospitalId={hospitalId}
           prefilledPatient={{ id: activePatient.id, full_name: activePatient.full_name, uhid: activePatient.uhid }}
           prefilledAmount={Number(depositRequired) || undefined}
+          admissionId={admittedId || existingAdmissionId || null}
           onClose={() => {
             setShowAdvanceModal(false);
             if (estimateOnlyMode && estimateSaved) { onAdmitted(); onClose(); }

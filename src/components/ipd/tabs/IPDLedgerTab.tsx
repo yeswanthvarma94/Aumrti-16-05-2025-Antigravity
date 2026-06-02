@@ -109,14 +109,33 @@ const IPDLedgerTab: React.FC<Props> = ({ admissionId, patientId, hospitalId }) =
       }
     });
 
-    // 5. Advances
-    const { data: advData } = await (supabase as any)
-      .from("advance_payments")
-      .select("amount")
-      .eq("admission_id", admissionId)
-      .eq("hospital_id", hospitalId);
+    // 5. Advances — ipd_advance_balances (primary) + unmirrored advance_receipts (legacy)
+    const [advBalance, ipdAdvRefs, receiptsData] = await Promise.all([
+      (supabase as any)
+        .from("ipd_advance_balances")
+        .select("total_deposited")
+        .eq("admission_id", admissionId)
+        .maybeSingle(),
+      (supabase as any)
+        .from("ipd_advances")
+        .select("reference_no")
+        .eq("admission_id", admissionId)
+        .not("reference_no", "is", null),
+      (supabase as any)
+        .from("advance_receipts")
+        .select("amount, receipt_number")
+        .eq("hospital_id", hospitalId)
+        .eq("patient_id", patientId),
+    ]);
 
-    const totalAdvance = (advData || []).reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+    const mirroredRefs = new Set(
+      (ipdAdvRefs.data || []).map((r: any) => r.reference_no)
+    );
+    const unmirroredReceiptTotal = (receiptsData.data || [])
+      .filter((r: any) => !mirroredRefs.has(r.receipt_number))
+      .reduce((s: number, r: any) => s + Number(r.amount || 0), 0);
+
+    const totalAdvance = Number(advBalance.data?.total_deposited || 0) + unmirroredReceiptTotal;
 
     ledger.sort((a, b) => a.date.localeCompare(b.date));
     setLines(ledger);

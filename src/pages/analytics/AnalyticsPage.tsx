@@ -19,6 +19,8 @@ import ExportModal from "@/components/analytics/ExportModal";
 import ScheduleReportModal from "@/components/analytics/ScheduleReportModal";
 import PROMAnalyticsTab from "@/components/analytics/PROMAnalyticsTab";
 import ESGTab from "@/components/analytics/ESGTab";
+import AIPerformanceDashboard from "@/components/analytics/AIPerformanceDashboard";
+import NationalBenchmarkTab from "@/components/analytics/NationalBenchmarkTab";
 import type { DateRange } from "@/hooks/useAnalyticsData";
 
 const QUICK_RANGES = [
@@ -38,9 +40,11 @@ const TABS = [
   { id: "departments", label: "🏢 Departments" },
   { id: "quality", label: "✅ Quality" },
   { id: "prom", label: "📋 PROM/PREM" },
-  { id: "esg", label: "🌱 ESG" },
-  { id: "digest", label: "🤖 AI Digest" },
-  { id: "custom", label: "📋 Custom Report" },
+  { id: "esg",       label: "🌱 ESG" },
+  { id: "digest",    label: "🤖 AI Digest" },
+  { id: "ai_perf",   label: "📈 AI Performance" },
+  { id: "benchmark", label: "🏆 National Benchmarks" },
+  { id: "custom",    label: "📋 Custom Report" },
 ] as const;
 
 function getRange(key: Exclude<QuickRange, "custom">): DateRange {
@@ -228,8 +232,10 @@ const AnalyticsPage: React.FC = () => {
         {activeTab === "quality" && <QualityTab range={range} />}
         {activeTab === "prom" && <PROMAnalyticsTab />}
         {activeTab === "esg" && <ESGTab />}
-        {activeTab === "digest" && <AIDigestTab />}
-        {activeTab === "custom" && <CustomReportBuilder range={range} />}
+        {activeTab === "digest"    && <AIDigestTab />}
+        {activeTab === "ai_perf"   && <AIPerformanceDashboard />}
+        {activeTab === "benchmark" && <NationalBenchmarkTab />}
+        {activeTab === "custom"    && <CustomReportBuilder range={range} />}
       </div>
 
       {/* Footer */}

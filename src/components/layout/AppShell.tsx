@@ -17,6 +17,7 @@ import IncidentFAB from "@/components/safety/IncidentFAB";
 import CredentialExpiryBanner from "./CredentialExpiryBanner";
 import { CredentialAlertProvider } from "@/contexts/CredentialAlertContext";
 import { ProductModeProvider } from "@/contexts/ProductModeContext";
+import TrialBanner from "@/components/subscription/TrialBanner";
 
 const PWAInstallBanner: React.FC = () => {
   const { canInstall, promptInstall } = usePWAInstall();
@@ -97,6 +98,7 @@ const ShellContent: React.FC = () => {
       <VoiceScribePanel />
       <ReportEventModal />
       <IncidentFAB />
+      <TrialBanner />
       <CredentialExpiryBanner />
       <PWAInstallBanner />
     </div>

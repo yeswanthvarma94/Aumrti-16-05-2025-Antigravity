@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalContext } from "@/contexts/HospitalContext";
 import { cn } from "@/lib/utils";
+import { hasTabAccess } from "@/lib/tabPermissions";
 import { Clock, Save, CheckCircle2, FileText, Printer, MessageSquare, AlertTriangle, Pencil } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -97,7 +98,7 @@ const STATUS_PILLS: Record<string, { bg: string; text: string; label: string }> 
 
 const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
   const { toast } = useToast();
-  const { role } = useHospitalContext();
+  const { role, permissions } = useHospitalContext();
   const { show: showWaNotif, card: waCard } = useWhatsAppNotification();
   const [items, setItems] = useState<TestItem[]>([]);
   const [localValues, setLocalValues] = useState<Record<string, string>>({});
@@ -113,6 +114,7 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
   const [history, setHistory] = useState<any[]>([]);
   const [labHospitalId, setLabHospitalId] = useState<string>("");
   const [validating, setValidating] = useState(false);
+  const [autoRunAnomaly, setAutoRunAnomaly] = useState(false);
   const [hospitalName, setHospitalName] = useState<string>("");
   const [nablNumber, setNablNumber] = useState<string>("");
   // Barcode state
@@ -574,6 +576,7 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
     }
 
     setValidating(false);
+    setAutoRunAnomaly(true); // auto-trigger AI anomaly analysis after validation
     fetchItems(); onRefresh();
     toast({ title: "✓ Report released" });
   };
@@ -722,10 +725,18 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
         onValueChange={(v) => { if (v === "history") fetchHistory(); }}
       >
         <TabsList className="shrink-0 bg-card border-b border-border rounded-none h-11 w-full justify-start px-5 gap-0">
-          <TabsTrigger value="results" className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">Results</TabsTrigger>
-          <TabsTrigger value="sample" className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">Sample</TabsTrigger>
-          <TabsTrigger value="history" className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">History</TabsTrigger>
-          <TabsTrigger value="notes" className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">Notes</TabsTrigger>
+          {[
+            { v: "results", l: "Results" },
+            { v: "sample", l: "Sample" },
+            { v: "history", l: "History" },
+            { v: "notes", l: "Notes" },
+          ]
+            .filter((t) => hasTabAccess("lab", t.v, permissions, role))
+            .map((t) => (
+              <TabsTrigger key={t.v} value={t.v} className="rounded-none border-b-2 border-transparent data-[state=active]:border-b-[hsl(var(--sidebar-background))] data-[state=active]:text-[hsl(var(--sidebar-background))] data-[state=active]:shadow-none text-[13px] px-6">
+                {t.l}
+              </TabsTrigger>
+            ))}
         </TabsList>
 
         {/* TAB 1: Results */}
@@ -962,6 +973,7 @@ const LabResultWorkspace: React.FC<Props> = ({ order, onRefresh }) => {
                 patientId={order.patient_id}
                 hospitalId={labHospitalId}
                 orderId={order.id}
+                autoRun={autoRunAnomaly}
                 currentResults={items.map(i => ({
                   test_name: i.test_name,
                   result_value: i.result_value,

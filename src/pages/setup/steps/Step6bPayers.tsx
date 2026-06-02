@@ -3,20 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { ShieldCheck, Plus, Trash2 } from "lucide-react";
+import { useConfigValues } from "@/hooks/useConfigValues";
 
-const TPA_LIST = [
-  "Star Health", "New India", "National Insurance", "United India",
-  "HDFC Ergo", "Care Health", "Bajaj Allianz", "Niva Bupa",
-  "Religare Health", "SBI Health", "ICICI Lombard", "Aditya Birla Health",
-  "ManipalCigna", "Iffco Tokio", "Royal Sundaram",
-];
-
-const GOV_SCHEMES = [
-  { label: "PMJAY / Ayushman Bharat", type: "pmjay" },
-  { label: "CGHS",                    type: "cghs" },
-  { label: "ECHS",                    type: "other" },
-  { label: "ESIS / ESI",              type: "esi" },
-];
 
 interface CorporateRow {
   name: string;
@@ -31,6 +19,8 @@ interface Props {
 
 const Step6bPayers: React.FC<Props> = ({ hospitalId, onComplete, onSkip }) => {
   const { toast } = useToast();
+  const tpaOptions = useConfigValues("tpa_companies");
+  const govOptions = useConfigValues("government_schemes");
   const [selectedTpas, setSelectedTpas] = useState<string[]>([]);
   const [selectedGov, setSelectedGov] = useState<string[]>([]);
   const [corporates, setCorporates] = useState<CorporateRow[]>([{ name: "", limit: "" }]);
@@ -72,7 +62,7 @@ const Step6bPayers: React.FC<Props> = ({ hospitalId, onComplete, onSkip }) => {
         ...selectedGov.map((type) => ({
           hospital_id: hospitalId,
           payer_type: type,
-          payer_name: GOV_SCHEMES.find((g) => g.type === type)?.label ?? type,
+          payer_name: govOptions.find((g) => g.value === type)?.label ?? type,
           is_active: true,
         })),
         ...corporates
@@ -116,19 +106,19 @@ const Step6bPayers: React.FC<Props> = ({ hospitalId, onComplete, onSkip }) => {
         <div className="bg-card rounded-2xl border border-border p-5 shadow-card">
           <p className="text-sm font-semibold text-foreground mb-3">TPA / Private Insurance</p>
           <div className="grid grid-cols-3 gap-2">
-            {TPA_LIST.map((tpa) => {
-              const checked = selectedTpas.includes(tpa);
+            {tpaOptions.map((tpa) => {
+              const checked = selectedTpas.includes(tpa.label);
               return (
-                <label key={tpa} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-[13px] transition-colors ${
+                <label key={tpa.value} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-[13px] transition-colors ${
                   checked ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-primary/40"
                 }`}>
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={() => toggleTpa(tpa)}
+                    onChange={() => toggleTpa(tpa.label)}
                     className="accent-primary"
                   />
-                  {tpa}
+                  {tpa.label}
                 </label>
               );
             })}
@@ -139,16 +129,16 @@ const Step6bPayers: React.FC<Props> = ({ hospitalId, onComplete, onSkip }) => {
         <div className="bg-card rounded-2xl border border-border p-5 shadow-card">
           <p className="text-sm font-semibold text-foreground mb-3">Government Schemes</p>
           <div className="grid grid-cols-2 gap-2">
-            {GOV_SCHEMES.map((g) => {
-              const checked = selectedGov.includes(g.type);
+            {govOptions.map((g) => {
+              const checked = selectedGov.includes(g.value);
               return (
-                <label key={g.type} className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border cursor-pointer text-[13px] transition-colors ${
+                <label key={g.value} className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border cursor-pointer text-[13px] transition-colors ${
                   checked ? "border-primary bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-primary/40"
                 }`}>
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={() => toggleGov(g.type)}
+                    onChange={() => toggleGov(g.value)}
                     className="accent-primary"
                   />
                   {g.label}

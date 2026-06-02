@@ -130,6 +130,20 @@ const LoginPage: React.FC = () => {
       if (error) throw error;
 
       // Fetch user role for routing
+      // Check Aumrti platform admin first
+      const { data: adminRow } = await (supabase as any)
+        .from("aumrti_admins")
+        .select("full_name")
+        .eq("auth_user_id", data.user.id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (adminRow) {
+        toast({ title: `Welcome, ${adminRow.full_name}! 🛡️` });
+        navigate("/platform", { replace: true });
+        return;
+      }
+
       const { data: userRow } = await supabase
         .from("users")
         .select("full_name, role")

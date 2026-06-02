@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { logInsuranceUpdate } from "@/lib/billAmendmentLogger";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -136,9 +137,12 @@ const InsuranceTab: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
   const showCopayCard = !!tpaConfig && (tpaConfig.room_rent_ceiling > 0 || tpaConfig.co_payment_type !== "none" || tpaConfig.deductible > 0);
 
   const handleSave = async () => {
-    const amt = Number(coveredAmount) || 0;
-    const patientPayable = bill.total_amount - bill.advance_received - amt;
-    const balanceDue = patientPayable - bill.paid_amount;
+    // insurance_amount = what TPA actually pays AFTER co-pay / deductible deductions
+    // patientShare (room excess + deductible + co-pay) is already computed above.
+    // Use insurancePays (net) so the patient's balance correctly reflects their share.
+    const netInsurancePays = tpaConfig && showCopayCard ? insurancePays : (Number(coveredAmount) || 0);
+    const patientPayable   = Math.max(0, bill.total_amount - bill.advance_received - netInsurancePays);
+    const balanceDue       = Math.max(0, patientPayable - bill.paid_amount);
 
     const notesObj: Record<string, any> = {
       tpa: tpaName,
@@ -146,16 +150,36 @@ const InsuranceTab: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
       pre_auth: preAuthNumber,
       coverage: coverageType,
     };
+    if (tpaConfig && showCopayCard) {
+      notesObj.copay_breakdown = {
+        covered_gross:   Number(coveredAmount) || 0,
+        room_excess:     roomExcess,
+        deductible:      tpaConfig.deductible ?? 0,
+        co_pay_amount:   coPayAmt,
+        patient_share:   patientShare,
+        insurance_pays:  netInsurancePays,
+      };
+    }
     if (coverageType === "reimbursement" && (bankName || accountNumber || ifsc || accountHolder)) {
       notesObj.reimbursement_bank = { bankName, accountNumber, ifsc, accountHolder };
     }
 
     await supabase.from("bills").update({
-      insurance_amount: amt,
-      patient_payable: Math.max(0, patientPayable),
-      balance_due: Math.max(0, balanceDue),
-      notes: JSON.stringify(notesObj),
+      insurance_amount: netInsurancePays,
+      patient_payable:  patientPayable,
+      balance_due:      balanceDue,
+      notes:            JSON.stringify(notesObj),
     }).eq("id", bill.id);
+
+    // Audit log
+    logInsuranceUpdate(bill.id, bill.hospital_id, {
+      insurance_amount: bill.insurance_amount ?? 0,
+      patient_payable:  bill.patient_payable ?? 0,
+    }, {
+      insurance_amount: netInsurancePays,
+      patient_payable:  patientPayable,
+    });
+
     toast({ title: "Insurance details saved" });
     onRefresh();
   };

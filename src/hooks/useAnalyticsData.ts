@@ -23,10 +23,10 @@ export function useRevenueKPIs(range: DateRange) {
           .in("payment_status", ["unpaid", "partial"])
           .gte("bill_date", range.from).lte("bill_date", range.to),
         supabase.from("bills").select("paid_amount, encounter_id").eq("hospital_id", hospitalId)
-          .eq("bill_type", "opd")
+          .eq("bill_type", "opd").in("payment_status", ["paid", "partial"])
           .gte("bill_date", range.from).lte("bill_date", range.to),
         supabase.from("bills").select("paid_amount, admission_id").eq("hospital_id", hospitalId)
-          .eq("bill_type", "ipd")
+          .eq("bill_type", "ipd").in("payment_status", ["paid", "partial"])
           .gte("bill_date", range.from).lte("bill_date", range.to),
         // Pharmacy retail sales live in pharmacy_dispensing — covers all historical and future data
         (supabase as any).from("pharmacy_dispensing").select("net_amount").eq("hospital_id", hospitalId)

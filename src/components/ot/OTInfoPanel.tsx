@@ -92,7 +92,7 @@ const OTInfoPanel: React.FC<Props> = ({ schedules, selectedDate, onSelectSchedul
   };
 
   return (
-    <div className="w-[300px] flex-shrink-0 bg-card border-l border-border flex flex-col h-full overflow-hidden">
+    <div className="w-full bg-card border-l border-border flex flex-col h-full overflow-hidden">
       {/* Today's summary */}
       <div className="p-4 border-b border-border flex-shrink-0">
         <p className="text-xs font-bold uppercase text-muted-foreground mb-2">Today's OT</p>

@@ -436,7 +436,7 @@ export async function autoPullAdmissionCharges(
   const { data: admission } = await supabase
     .from("admissions")
     .select(
-      "admitted_at, discharged_at, ward_id, wards(name, type, rate_per_day), beds(bed_number)"
+      "admitted_at, discharged_at, ward_id, bed_id, wards(name, type, rate_per_day), beds(bed_number, bed_category)"
     )
     .eq("id", admissionId)
     .maybeSingle();
@@ -453,12 +453,26 @@ export async function autoPullAdmissionCharges(
     const wardName = (admission as any).wards?.name || "Ward";
     const wardType = (admission as any).wards?.type || "general";
     const bedNum = (admission as any).beds?.bed_number || "";
+    // bed_category (e.g. "icu", "private") takes precedence over ward type for rate lookup
+    const bedCategory: string = (admission as any).beds?.bed_category || wardType;
 
-    const { data: roomRate } = await supabase
+    // Priority 1: service_rates table with bed_category match (most specific)
+    const { data: categoryRate } = await (supabase as any)
+      .from("service_rates")
+      .select("rate, gst_percent, gst_applicable")
+      .eq("hospital_id", hospitalId)
+      .eq("bed_category", bedCategory)
+      .eq("is_active", true)
+      .ilike("item_type", "%room%")
+      .limit(1)
+      .maybeSingle();
+
+    // Priority 2: service_master by ward name / ward type
+    const { data: roomRate } = categoryRate ? { data: null } : await supabase
       .from("service_master")
       .select("fee, gst_percent, gst_applicable")
       .eq("hospital_id", hospitalId)
-      .ilike("name", `%${wardType}%`)
+      .ilike("name", `%${bedCategory}%`)
       .ilike("item_type", "%room%")
       .eq("is_active", true)
       .limit(1)
@@ -466,14 +480,17 @@ export async function autoPullAdmissionCharges(
 
     const wardDbRate = Number((admission as any).wards?.rate_per_day) || 0;
     const ratePerDay =
-      wardDbRate > 0
+      categoryRate?.rate
+        ? Number(categoryRate.rate)
+        : wardDbRate > 0
         ? wardDbRate
         : roomRate?.fee
         ? Number(roomRate.fee)
         : 500;
-    if (wardDbRate <= 0 && !roomRate?.fee) usedFallbackRate = true;
-    const roomGstPct = roomRate?.gst_applicable
-      ? Number(roomRate.gst_percent) || 0
+    if (!categoryRate?.rate && wardDbRate <= 0 && !roomRate?.fee) usedFallbackRate = true;
+    const effectiveRate = categoryRate ?? roomRate;
+    const roomGstPct = effectiveRate?.gst_applicable
+      ? Number(effectiveRate.gst_percent) || 0
       : 0;
     const roomTotal = ratePerDay * days;
     const roomGst = calcGST(roomTotal, roomGstPct);

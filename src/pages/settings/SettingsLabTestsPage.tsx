@@ -14,11 +14,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { cn } from "@/lib/utils";
 import BulkLabTestImportModal from "@/components/settings/BulkLabTestImportModal";
-
-const CATEGORIES = ["Haematology", "Biochemistry", "Pathology", "Microbiology", "Serology", "Immunology"];
+import { useConfigValues } from "@/hooks/useConfigValues";
 
 const SettingsLabTestsPage: React.FC = () => {
   const { toast } = useToast();
+  const labCategoryOptions = useConfigValues("lab_test_categories");
   const { hospitalId } = useHospitalId();
   const queryClient = useQueryClient();
 
@@ -271,7 +271,7 @@ const SettingsLabTestsPage: React.FC = () => {
               <SelectTrigger className="w-[160px] h-9"><SelectValue placeholder="Category" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Categories</SelectItem>
-                {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                {labCategoryOptions.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
               </SelectContent>
             </Select>
             <Button variant="outline" size="sm" onClick={() => setShowBulkImport(true)} className="gap-1"><Upload size={14} /> Bulk Import</Button>
@@ -387,7 +387,7 @@ const SettingsLabTestsPage: React.FC = () => {
               <div><Label>Category</Label>
                 <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                  <SelectContent>{labCategoryOptions.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
             </div>
@@ -444,7 +444,7 @@ const SettingsLabTestsPage: React.FC = () => {
                 <Label>Category</Label>
                 <Select value={groupForm.category} onValueChange={(v) => setGroupForm({ ...groupForm, category: v })}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                  <SelectContent>{labCategoryOptions.map(c => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div>

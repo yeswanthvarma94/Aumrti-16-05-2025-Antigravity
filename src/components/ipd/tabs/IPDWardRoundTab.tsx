@@ -46,16 +46,25 @@ const IPDWardRoundTab: React.FC<Props> = ({ admissionId, hospitalId, userId, pat
   const [medChanges, setMedChanges] = useState<MedChange[]>([]);
   const [investigationsToOrder, setInvestigationsToOrder] = useState<string[]>([]);
   const [dischargePlan, setDischargePlan] = useState<string | null>(null);
+  const [detectedVitals, setDetectedVitals] = useState<Record<string, string> | null>(null);
 
   // Register fill function for voice scribe
   useEffect(() => {
     const fillFn = (data: Record<string, unknown>) => {
       setForm((prev) => ({
         s: (data.subjective as string) || prev.s,
+        // If AI extracted vitals separately, keep them out of the O field
         o: (data.objective as string) || prev.o,
         a: (data.assessment as string) || prev.a,
         p: (data.plan as string) || prev.p,
       }));
+
+      // Vitals detected from dictation — show as a suggestion banner
+      if (data.vitals_detected && typeof data.vitals_detected === "object") {
+        const v = data.vitals_detected as Record<string, string>;
+        const hasAny = Object.values(v).some((val) => val && String(val).trim() !== "");
+        if (hasAny) setDetectedVitals(v);
+      }
 
       // Medication changes
       if (Array.isArray(data.medication_changes) && data.medication_changes.length > 0) {
@@ -320,8 +329,28 @@ const IPDWardRoundTab: React.FC<Props> = ({ admissionId, hospitalId, userId, pat
       {/* Voice scribe hint */}
       <div className="flex-shrink-0 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-3 flex items-center gap-2">
         <Mic className="h-3.5 w-3.5 text-primary" />
-        <span className="text-[11px] text-primary font-medium">Tap mic to dictate ward round — auto-fills SOAP fields</span>
+        <span className="text-[11px] text-primary font-medium">Tap mic to dictate ward round — auto-fills SOAP fields, detects vitals &amp; investigations</span>
       </div>
+
+      {/* Voice-detected vitals banner */}
+      {detectedVitals && (
+        <div className="flex-shrink-0 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[11px] font-semibold text-emerald-700">🎤 Vitals detected in dictation — verify &amp; record in Vitals tab</span>
+            <button onClick={() => setDetectedVitals(null)} className="text-emerald-600 hover:text-emerald-800 text-[11px]">✕</button>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {detectedVitals.bp_sys && detectedVitals.bp_dia && (
+              <span className="text-[11px] text-emerald-800 font-medium">BP: {detectedVitals.bp_sys}/{detectedVitals.bp_dia} mmHg</span>
+            )}
+            {detectedVitals.pulse && <span className="text-[11px] text-emerald-800 font-medium">Pulse: {detectedVitals.pulse} bpm</span>}
+            {detectedVitals.temp && <span className="text-[11px] text-emerald-800 font-medium">Temp: {detectedVitals.temp}°F</span>}
+            {detectedVitals.spo2 && <span className="text-[11px] text-emerald-800 font-medium">SpO₂: {detectedVitals.spo2}%</span>}
+            {detectedVitals.rr && <span className="text-[11px] text-emerald-800 font-medium">RR: {detectedVitals.rr}/min</span>}
+            {detectedVitals.pain_score && <span className="text-[11px] text-emerald-800 font-medium">Pain: {detectedVitals.pain_score}/10</span>}
+          </div>
+        </div>
+      )}
 
       {/* Add note form */}
       <div className="flex-shrink-0 bg-white border border-slate-200 rounded-lg p-3 mb-3">

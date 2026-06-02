@@ -3,9 +3,13 @@ import { generateBillNumber } from "@/hooks/useBillNumber";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import CollapsiblePanel from "@/components/layout/CollapsiblePanel";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasTabAccess } from "@/lib/tabPermissions";
 import { cn } from "@/lib/utils";
 import { autoPullAdmissionCharges as autoPullAdmissionChargesUtil } from "@/lib/ipdBilling";
-import { AlertTriangle, Lock } from "lucide-react";
+import { AlertTriangle, Lock, X, Receipt } from "lucide-react";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import NABHBadge from "@/components/nabh/NABHBadge";
 
 import BillQueue from "@/components/billing/BillQueue";
@@ -15,6 +19,7 @@ import AdvanceReceiptModal from "@/components/billing/AdvanceReceiptModal";
 import CollectionsTab from "@/components/billing/tabs/CollectionsTab";
 import PendingCollectionsPanel from "@/components/billing/PendingCollectionsPanel";
 import DiscountApprovalsInbox from "@/components/billing/DiscountApprovalsInbox";
+import LeakageDashboard from "@/components/billing/RevenueLeak/LeakageDashboard";
 
 export interface BillRecord {
   id: string;
@@ -46,8 +51,17 @@ export interface BillRecord {
   payer_type?: string | null;
 }
 
+const BILLING_TABS = [
+  { key: "bills", label: "Bills" },
+  { key: "collections", label: "💳 Collections" },
+  { key: "pending", label: "🔴 Pending Payments" },
+  { key: "leakage", label: "📉 Revenue Leakage" },
+  { key: "approvals", label: "🔐 Approvals", hasBadge: true },
+] as const;
+
 const BillingPage: React.FC = () => {
   const { toast } = useToast();
+  const { permissions, role } = useHospitalContext();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [hospitalId, setHospitalId] = useState<string | null>(null);
@@ -382,40 +396,28 @@ const BillingPage: React.FC = () => {
 
       {/* Tab bar */}
       <div className="h-10 flex-shrink-0 border-b border-border bg-background px-4 flex items-center gap-1">
-        <button
-          className={cn("px-3 py-1.5 text-xs font-bold rounded-md transition-colors",
-            activeTab === "bills" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => setActiveTab("bills")}
-        >Bills</button>
-        <button
-          className={cn("px-3 py-1.5 text-xs font-bold rounded-md transition-colors",
-            activeTab === "collections" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => setActiveTab("collections")}
-        >💳 Collections</button>
-        <button
-          className={cn("px-3 py-1.5 text-xs font-bold rounded-md transition-colors",
-            activeTab === "pending" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => setActiveTab("pending")}
-        >🔴 Pending Payments</button>
-        <button
-          className={cn("px-3 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center gap-1.5",
-            activeTab === "approvals" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => setActiveTab("approvals")}
-        >
-          🔐 Approvals
-          {pendingDiscountCount > 0 && (
-            <span className={cn(
-              "text-[10px] px-1.5 py-0.5 rounded-full font-bold min-w-[18px] text-center",
-              activeTab === "approvals" ? "bg-white text-primary" : "bg-amber-500 text-white"
-            )}>
-              {pendingDiscountCount}
-            </span>
-          )}
-        </button>
+        {BILLING_TABS.filter((t) => hasTabAccess("billing", t.key, permissions, role)).map((t) => (
+          <button
+            key={t.key}
+            className={cn(
+              "px-3 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center gap-1.5",
+              t.key === "leakage"
+                ? (activeTab === t.key ? "bg-destructive text-destructive-foreground" : "text-red-600 hover:text-red-700")
+                : (activeTab === t.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")
+            )}
+            onClick={() => setActiveTab(t.key)}
+          >
+            {t.label}
+            {t.key === "approvals" && pendingDiscountCount > 0 && (
+              <span className={cn(
+                "text-[10px] px-1.5 py-0.5 rounded-full font-bold min-w-[18px] text-center",
+                activeTab === "approvals" ? "bg-white text-primary" : "bg-amber-500 text-white"
+              )}>
+                {pendingDiscountCount}
+              </span>
+            )}
+          </button>
+        ))}
         <div className="flex-1" />
         <NABHBadge standardCodes={["ROM.2", "IMS.1", "IMS.3"]} />
         <button
@@ -432,7 +434,7 @@ const BillingPage: React.FC = () => {
       </div>
 
       {activeTab === "bills" ? (
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden">
           <BillQueue
             bills={bills}
             loading={loading}
@@ -460,14 +462,13 @@ const BillingPage: React.FC = () => {
             pendingAmount={pendingAmount}
             billCount={bills.length}
           />
-          <BillEditor
-            bill={selectedBill}
-            hospitalId={hospitalId}
-            onRefresh={fetchBills}
-          />
         </div>
       ) : activeTab === "collections" ? (
         hospitalId && <CollectionsTab hospitalId={hospitalId} />
+      ) : activeTab === "leakage" ? (
+        <div className="flex-1 overflow-y-auto">
+          <LeakageDashboard />
+        </div>
       ) : activeTab === "approvals" ? (
         <div className="flex-1 overflow-hidden">
           {hospitalId && (
@@ -486,6 +487,40 @@ const BillingPage: React.FC = () => {
           <PendingCollectionsPanel />
         </div>
       )}
+
+      {/* ── Bill Editor Modal ── */}
+      <Dialog open={!!selectedBillId && !!selectedBill} onOpenChange={(open) => { if (!open) setSelectedBillId(null); }}>
+        <DialogContent className="max-w-[96vw] w-[1400px] h-[92vh] p-0 gap-0 flex flex-col overflow-hidden">
+          {/* Close button row */}
+          <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-border bg-muted/40">
+            <div className="flex items-center gap-2">
+              <Receipt size={15} className="text-muted-foreground" />
+              <span className="text-sm font-semibold text-foreground">
+                {selectedBill?.bill_number ?? "Bill"}
+              </span>
+              {selectedBill && (
+                <span className="text-xs text-muted-foreground">
+                  · {selectedBill.patient_name} · {selectedBill.bill_type.toUpperCase()}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setSelectedBillId(null)}
+              className="h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {/* BillEditor fills remaining modal height */}
+          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+            <BillEditor
+              bill={selectedBill}
+              hospitalId={hospitalId}
+              onRefresh={fetchBills}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {showNewBill && hospitalId && (
         <NewBillModal

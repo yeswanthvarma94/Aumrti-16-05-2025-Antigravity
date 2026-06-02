@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { useToast } from "@/hooks/use-toast";
+import { autoChargeService, MODULE_HOME_CARE } from "@/lib/serviceBilling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -75,7 +76,21 @@ const HomeCareVisitTab: React.FC = () => {
       nurse_notes: recordForm.nurse_notes || null,
     }).eq("id", selectedVisit.id);
     if (error) { toast({ title: "Save failed", description: error.message, variant: "destructive" }); }
-    else { toast({ title: "Visit recorded ✓" }); setSelectedVisit(null); load(); }
+    else {
+      // Auto-bill the home care visit
+      if (hospitalId && selectedVisit.patient_id) {
+        autoChargeService({
+          hospitalId,
+          patientId: selectedVisit.patient_id,
+          serviceName: `Home Care Visit — ${(recordForm.services_done || []).join(", ") || "Nursing Visit"}`,
+          serviceModule: MODULE_HOME_CARE,
+          sourceTable:   "home_care_visits",
+          sourceId:      selectedVisit.id,
+          serviceDate:   new Date().toISOString().split("T")[0],
+        }).catch(() => {});
+      }
+      toast({ title: "Visit recorded ✓" }); setSelectedVisit(null); load();
+    }
     setSaving(false);
   };
 

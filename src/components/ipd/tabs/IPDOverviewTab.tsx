@@ -7,6 +7,8 @@ import { toast } from "@/hooks/use-toast";
 import DischargeInstructions from "@/components/ipd/DischargeInstructions";
 import DischargeSummaryGenerator from "@/components/ipd/DischargeSummaryGenerator";
 import DischargeSummaryAIPanel from "@/components/ipd/DischargeSummaryAIPanel";
+import ReadmissionRiskPanel from "@/components/ipd/ReadmissionRiskPanel";
+import PreDischargeLeakageBanner from "@/components/ipd/PreDischargeLeakageBanner";
 import DischargeTATTimer from "@/components/ipd/DischargeTATTimer";
 import SepsisWarningBanner from "@/components/ipd/SepsisWarningBanner";
 import { autoPullAdmissionCharges } from "@/lib/ipdBilling";
@@ -508,6 +510,17 @@ const IPDOverviewTab: React.FC<Props> = ({ admissionId, hospitalId, onTabChange,
                       </div>
                     ) : (
                       <div className="space-y-3">
+                        {hospitalId && (
+                          <PreDischargeLeakageBanner
+                            admissionId={admissionId}
+                            hospitalId={hospitalId}
+                          />
+                        )}
+                        <ReadmissionRiskPanel
+                          admissionId={admissionId}
+                          patientId={undefined}
+                          hospitalId={hospitalId}
+                        />
                         <DischargeSummaryAIPanel
                           admissionId={admissionId}
                           hospitalId={hospitalId || ""}

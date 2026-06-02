@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { recordUnbilledService } from "@/lib/serviceBilling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -274,6 +275,17 @@ const SterilizeTab: React.FC<Props> = ({ showNewCycle, onCloseNewCycle, onRefres
         "COP.8",
         `Sterilization cycle ${cycle.cycle_number} completed. ${cycle.biological_indicator_used ? "BI pending." : "No BI — chemical indicator only."} Sets sterilised: ${cycle.cycle_instruments?.length || 0}`
       );
+      // Record CSSD charge in leakage dashboard (no patient to bill directly — cost centre)
+      // OT will pick up sterilization packs in their bill via ipdBilling.
+      // For OPD instrument sets, record as unbilled for manual review.
+      recordUnbilledService({
+        hospitalId:    cUser.hospital_id,
+        serviceModule: "cssd",
+        serviceRefId:  cycle.id,
+        serviceName:   `Sterilization Cycle ${cycle.cycle_number} — ${cycle.sterilizer_type || "Autoclave"}`,
+        serviceDate:   new Date().toISOString().split("T")[0],
+        notes:         `Sets sterilized: ${cycle.cycle_instruments?.length || 0}. Charge to be applied on OT bill or as department cost.`,
+      }).catch(() => {});
     }
 
     toast({ title: "Cycle completed" });

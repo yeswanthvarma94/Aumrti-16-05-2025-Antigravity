@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import OfflineBanner from "./components/OfflineBanner.tsx";
+import { OfflineSyncProvider } from "./contexts/OfflineSyncContext.tsx";
 import "./index.css";
 
 // Register service worker only in production builds.
@@ -25,7 +26,9 @@ if (import.meta.env.PROD) {
 
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
-    <OfflineBanner />
-    <App />
+    <OfflineSyncProvider>
+      <OfflineBanner />
+      <App />
+    </OfflineSyncProvider>
   </ErrorBoundary>
 );

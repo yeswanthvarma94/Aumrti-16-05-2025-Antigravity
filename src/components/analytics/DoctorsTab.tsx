@@ -38,7 +38,7 @@ const DoctorsTab: React.FC<{ range: DateRange }> = ({ range }) => {
     return [...list].sort((a, b) => (b[sortBy] || 0) - (a[sortBy] || 0));
   }, [doctors, search, deptFilter, sortBy]);
 
-  const maxRevenue = Math.max(1, ...filtered.map(d => d.revenue));
+  const maxRevenue = useMemo(() => Math.max(1, ...filtered.map(d => d.revenue)), [filtered]);
 
   if (isLoading) return <div className="p-5 space-y-3">{[1,2,3,4].map(i => <Skeleton key={i} className="h-36 w-full" />)}</div>;
 

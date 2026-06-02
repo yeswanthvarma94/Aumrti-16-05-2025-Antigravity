@@ -101,7 +101,7 @@ const RadiologyWorklist: React.FC<Props> = ({
   const visibleOrders = filterStatus === "all" ? orders : orders.filter(o => o.status === filterStatus);
 
   return (
-    <div className="w-[320px] shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
+    <div className="w-full bg-card border-r border-border flex flex-col overflow-hidden">
       {/* Header */}
       <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border">
         <div className="flex items-center justify-between">

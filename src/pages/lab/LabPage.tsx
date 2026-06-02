@@ -2,6 +2,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Microscope } from "lucide-react";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import CollapsiblePanel from "@/components/layout/CollapsiblePanel";
+import { hasTabAccess } from "@/lib/tabPermissions";
 import NABHBadge from "@/components/nabh/NABHBadge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import LabQueuePanel from "@/components/lab/LabQueuePanel";
@@ -11,6 +14,7 @@ import NewLabOrderModal from "@/components/lab/NewLabOrderModal";
 import LabQCDashboard from "@/components/lab/LabQCDashboard";
 import LabCalibrationTab from "@/components/lab/LabCalibrationTab";
 import ExternalReferralsTab from "@/components/lab/ExternalReferralsTab";
+import LabAnalyzerTab from "@/components/lab/LabAnalyzerTab";
 
 interface PendingOpdLabOrder {
   prescriptionId: string;
@@ -34,8 +38,17 @@ interface LabOrder {
   lab_order_items: { id: string; status: string; result_flag: string | null; result_value: string | null; test_id: string; validated_at: string | null; lab_test_master: { tat_minutes: number } | null }[];
 }
 
+const LAB_MAIN_TABS = [
+  { key: "worklist" as const, label: "🔬 Worklist" },
+  { key: "qc" as const, label: "📊 QC Dashboard" },
+  { key: "calibration" as const, label: "🔧 Calibration (NABL)" },
+  { key: "external" as const, label: "🔗 External Referrals" },
+  { key: "analyzer" as const, label: "⚙️ Analyzer Interface" },
+] as const;
+
 const LabPage: React.FC = () => {
   const { toast } = useToast();
+  const { permissions, role } = useHospitalContext();
   const [orders, setOrders] = useState<LabOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [filterTab, setFilterTab] = useState("all");
@@ -183,36 +196,21 @@ const LabPage: React.FC = () => {
   const urgentCount = orders.filter((o) => o.priority === "urgent").length;
   const routineCount = orders.filter((o) => o.priority === "routine").length;
 
-  const [mainTab, setMainTab] = useState<"worklist" | "qc" | "calibration" | "external">("worklist");
+  const [mainTab, setMainTab] = useState<"worklist" | "qc" | "calibration" | "external" | "analyzer">("worklist");
 
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 56px)" }}>
       {/* Top tab bar */}
       <div className="h-[40px] flex-shrink-0 bg-card border-b border-border px-5 flex items-center gap-4">
-        <button
-          onClick={() => setMainTab("worklist")}
-          className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-colors ${mainTab === "worklist" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-        >
-          🔬 Worklist
-        </button>
-        <button
-          onClick={() => setMainTab("qc")}
-          className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-colors ${mainTab === "qc" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-        >
-          📊 QC Dashboard
-        </button>
-        <button
-          onClick={() => setMainTab("calibration")}
-          className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-colors ${mainTab === "calibration" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-        >
-          🔧 Calibration (NABL)
-        </button>
-        <button
-          onClick={() => setMainTab("external")}
-          className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-colors ${mainTab === "external" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
-        >
-          🔗 External Referrals
-        </button>
+        {LAB_MAIN_TABS.filter((t) => hasTabAccess("lab", t.key, permissions, role)).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setMainTab(t.key)}
+            className={`text-xs font-semibold px-3 py-1.5 rounded-md transition-colors ${mainTab === t.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+          >
+            {t.label}
+          </button>
+        ))}
         <div className="ml-auto" />
         <NABHBadge standardCodes={["AAC.3", "HIC.4", "QPS.2"]} />
       </div>
@@ -225,29 +223,35 @@ const LabPage: React.FC = () => {
         <div className="flex-1 overflow-hidden">
           <ExternalReferralsTab hospitalId={hospitalId} />
         </div>
+      ) : mainTab === "analyzer" ? (
+        <div className="flex-1 overflow-y-auto">
+          <LabAnalyzerTab />
+        </div>
       ) : (
         <div className="flex flex-1 overflow-hidden">
           {/* Left: Queue */}
-          <LabQueuePanel
-            orders={filteredOrders}
-            selectedOrderId={selectedOrderId}
-            onSelectOrder={setSelectedOrderId}
-            filterTab={filterTab}
-            onFilterChange={setFilterTab}
-            selectedDate={selectedDate}
-            onDateChange={handleDateChange}
-            statCount={statCount}
-            urgentCount={urgentCount}
-            routineCount={routineCount}
-            onNewOrder={() => setShowNewOrder(true)}
-            pendingOpdOrders={pendingOpdOrders}
-            onCreateFromOpd={(patient, testNames, encounterId) => {
-              setPendingOrderPatient(patient);
-              setPendingOrderTestNames(testNames);
-              setPendingOrderEncounterId(encounterId);
-              setShowNewOrder(true);
-            }}
-          />
+          <CollapsiblePanel panelKey="lab_queue" title="Lab Queue" side="left" expandedWidth="w-[280px]">
+            <LabQueuePanel
+              orders={filteredOrders}
+              selectedOrderId={selectedOrderId}
+              onSelectOrder={setSelectedOrderId}
+              filterTab={filterTab}
+              onFilterChange={setFilterTab}
+              selectedDate={selectedDate}
+              onDateChange={handleDateChange}
+              statCount={statCount}
+              urgentCount={urgentCount}
+              routineCount={routineCount}
+              onNewOrder={() => setShowNewOrder(true)}
+              pendingOpdOrders={pendingOpdOrders}
+              onCreateFromOpd={(patient, testNames, encounterId) => {
+                setPendingOrderPatient(patient);
+                setPendingOrderTestNames(testNames);
+                setPendingOrderEncounterId(encounterId);
+                setShowNewOrder(true);
+              }}
+            />
+          </CollapsiblePanel>
 
           {/* Center: Workspace */}
           {selectedOrder ? (
@@ -263,22 +267,24 @@ const LabPage: React.FC = () => {
           )}
 
           {/* Right: Info */}
-          <LabInfoPanel
-            selectedOrder={selectedOrder}
-            onSelectOrder={setSelectedOrderId}
-            onAddTestToOrder={(patient) => {
-              setPendingOrderPatient(patient);
-              setPendingOrderTestNames([]);
-              setPendingOrderEncounterId(null);
-              setShowNewOrder(true);
-            }}
-            onRepeatOrder={(patient, testNames) => {
-              setPendingOrderPatient(patient);
-              setPendingOrderTestNames(testNames);
-              setPendingOrderEncounterId(null);
-              setShowNewOrder(true);
-            }}
-          />
+          <CollapsiblePanel panelKey="lab_info" title="Patient Info" side="right" expandedWidth="w-[300px]">
+            <LabInfoPanel
+              selectedOrder={selectedOrder}
+              onSelectOrder={setSelectedOrderId}
+              onAddTestToOrder={(patient) => {
+                setPendingOrderPatient(patient);
+                setPendingOrderTestNames([]);
+                setPendingOrderEncounterId(null);
+                setShowNewOrder(true);
+              }}
+              onRepeatOrder={(patient, testNames) => {
+                setPendingOrderPatient(patient);
+                setPendingOrderTestNames(testNames);
+                setPendingOrderEncounterId(null);
+                setShowNewOrder(true);
+              }}
+            />
+          </CollapsiblePanel>
         </div>
       )}
 

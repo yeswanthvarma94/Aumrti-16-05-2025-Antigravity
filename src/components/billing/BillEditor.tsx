@@ -13,6 +13,7 @@ import LineItemsTab from "@/components/billing/tabs/LineItemsTab";
 import PaymentsTab from "@/components/billing/tabs/PaymentsTab";
 import InsuranceTab from "@/components/billing/tabs/InsuranceTab";
 import DiscountTab from "@/components/billing/tabs/DiscountTab";
+import AdvanceApplicationTab from "@/components/billing/tabs/AdvanceApplicationTab";
 import GSTInvoiceModal from "@/components/billing/GSTInvoiceModal";
 import PaymentLinkModal from "@/components/billing/PaymentLinkModal";
 import { useWhatsAppNotification } from "@/components/whatsapp/WhatsAppNotificationCard";
@@ -337,7 +338,7 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
   return (
     <>
     {waCard}
-    <div className="flex-1 flex flex-col overflow-hidden bg-muted/30">
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0 bg-muted/30">
       {/* Header */}
       <div className="bg-card border-b border-border px-5 py-3 flex items-center gap-4 flex-shrink-0">
         <div className="w-9 h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-bold">
@@ -479,6 +480,14 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
           <TabsTrigger value="items" className="text-xs">Line Items</TabsTrigger>
           <TabsTrigger value="payments" className="text-xs">Payments</TabsTrigger>
           <TabsTrigger value="insurance" className="text-xs">Insurance</TabsTrigger>
+          {bill.bill_type === "ipd" && bill.admission_id && (
+            <TabsTrigger value="advance" className="text-xs flex items-center gap-1">
+              Advance
+              {(bill as any).advance_applied > 0 && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+              )}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="discount" className="text-xs flex items-center gap-1">
             Discount
             {bill.bill_status === "pending_approval" && (
@@ -506,6 +515,20 @@ const BillEditor: React.FC<Props> = ({ bill, hospitalId, onRefresh }) => {
         <TabsContent value="insurance" className="flex-1 overflow-auto mt-0 p-5">
           <InsuranceTab bill={bill} hospitalId={hospitalId} onRefresh={onRefresh} />
         </TabsContent>
+        {bill.bill_type === "ipd" && bill.admission_id && (
+          <TabsContent value="advance" className="flex-1 overflow-auto mt-0 p-5">
+            <AdvanceApplicationTab
+              billId={bill.id}
+              admissionId={bill.admission_id}
+              patientId={bill.patient_id}
+              hospitalId={hospitalId}
+              totalAmount={bill.total_amount}
+              advanceApplied={(bill as any).advance_applied ?? bill.advance_received ?? 0}
+              paidAmount={bill.paid_amount}
+              onRefresh={onRefresh}
+            />
+          </TabsContent>
+        )}
         <TabsContent value="discount" className="flex-1 overflow-auto mt-0 p-5">
           {hospitalId && (
             <DiscountTab

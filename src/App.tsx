@@ -14,6 +14,7 @@ import ModuleErrorBoundary from "@/components/auth/ModuleErrorBoundary";
 import { ROUTE_ROLES } from "@/lib/routeRoles";
 import { HospitalProvider } from "@/contexts/HospitalContext";
 import { useProductMode } from "@/contexts/ProductModeContext";
+import { useSubscriptionConfig, CANONICAL_MODULE_KEYS } from "@/hooks/useSubscriptionConfig";
 import { Lock } from "lucide-react";
 
 const Register = lazy(() => import("./pages/register"));
@@ -135,6 +136,7 @@ const SettingsHMISPage = lazy(() => import("./pages/settings/SettingsHMISPage"))
 const SettingsAIFeaturesPage = lazy(() => import("./pages/settings/SettingsAIFeaturesPage"));
 const SettingsAILanguagePage = lazy(() => import("./pages/settings/SettingsAILanguagePage"));
 const SettingsInventoryPage = lazy(() => import("./pages/settings/SettingsInventoryPage"));
+const SettingsConfigValuesPage = lazy(() => import("./pages/settings/SettingsConfigValuesPage"));
 const IntegrationsHubPage = lazy(() => import("./pages/settings/IntegrationsHubPage"));
 const SettingsProductModePage = lazy(() => import("./pages/settings/SettingsProductModePage"));
 const ABDMConsentPage = lazy(() => import("./pages/ABDMConsentPage"));
@@ -152,6 +154,18 @@ const SettingsRecordRetentionPage = lazy(() => import("./pages/settings/Settings
 const IMSAccessLogsPage = lazy(() => import("./pages/ims/IMSAccessLogsPage"));
 const ConfigChangeLogPage = lazy(() => import("./pages/settings/ConfigChangeLogPage"));
 const CostCentresPage = lazy(() => import("./pages/accounts/CostCentresPage"));
+
+// ── Aumrti Platform (CEO control plane) ──────────────────────
+const PlatformShell         = lazy(() => import("./components/platform/PlatformShell"));
+const PlatformDashboard     = lazy(() => import("./pages/platform/PlatformDashboard"));
+const HospitalsListPage     = lazy(() => import("./pages/platform/HospitalsListPage"));
+const HospitalDetailPage    = lazy(() => import("./pages/platform/HospitalDetailPage"));
+const PlansManagerPage      = lazy(() => import("./pages/platform/PlansManagerPage"));
+const DiscountsPage         = lazy(() => import("./pages/platform/DiscountsPage"));
+const RevenueDashboardPage  = lazy(() => import("./pages/platform/RevenueDashboardPage"));
+const PlatformSettingsPage  = lazy(() => import("./pages/platform/PlatformSettingsPage"));
+const ChurnRadarPage        = lazy(() => import("./pages/platform/ChurnRadarPage"));
+const PlatformBriefingPage  = lazy(() => import("./pages/platform/PlatformBriefingPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -188,17 +202,24 @@ const SM = ({ name, children }: { name: string; children: React.ReactNode }) => 
   );
 };
 
-/** Gates a route behind product-mode module enablement. */
+/** Gates a route behind both subscription plan access AND product-mode enablement. */
 const MG = ({ moduleKey, children }: { moduleKey: string; children: ReactNode }) => {
   const { isModuleEnabled, loadingMode } = useProductMode();
-  if (loadingMode) return null;
-  if (!isModuleEnabled(moduleKey)) return (
+  const { enabledModules, isLoading: subLoading } = useSubscriptionConfig();
+  if (loadingMode || subLoading) return null;
+  // Only enforce subscription gate for keys the platform actually tracks in plan_features.
+  // Untracked keys (e.g. "patients", "ipc", "fms") are always subscription-allowed.
+  const isTracked = CANONICAL_MODULE_KEYS.includes(moduleKey);
+  const subAllowed = !isTracked || enabledModules.includes(moduleKey);
+  const modeAllowed = isModuleEnabled(moduleKey);
+  if (!subAllowed || !modeAllowed) return (
     <div className="h-[calc(100vh-56px)] flex flex-col items-center justify-center gap-4 text-center px-8">
       <Lock size={40} className="text-muted-foreground/30" />
       <p className="text-xl font-bold text-foreground">Module Not Enabled</p>
       <p className="text-sm text-muted-foreground max-w-xs leading-relaxed">
-        This module is disabled for your deployment. Contact your admin to enable it in{" "}
-        <strong>Settings → Product Mode</strong>.
+        {!subAllowed
+          ? "This module is not included in your current plan. Contact Aumrti support to upgrade."
+          : "This module is disabled for your deployment. Contact your admin to enable it in Settings → Product Mode."}
       </p>
     </div>
   );
@@ -303,6 +324,7 @@ const App = () => (
             <Route path="/settings/ai-features" element={<RG path="/settings"><SM name="AI Features"><SettingsAIFeaturesPage /></SM></RG>} />
             <Route path="/settings/ai-languages" element={<RG path="/settings"><SM name="AI Language Packs"><SettingsAILanguagePage /></SM></RG>} />
             <Route path="/settings/inventory" element={<RG path="/settings"><SM name="Inventory Settings"><SettingsInventoryPage /></SM></RG>} />
+            <Route path="/settings/config-values" element={<RG path="/settings"><SM name="Configurable Dropdowns"><SettingsConfigValuesPage /></SM></RG>} />
             <Route path="/settings/gst" element={<RG path="/settings"><SM name="GST"><SettingsGSTPage /></SM></RG>} />
             <Route path="/settings/abdm" element={<RG path="/settings"><SM name="ABDM"><SettingsABDMPage /></SM></RG>} />
             <Route path="/abdm" element={<RG path="/abdm"><SM name="ABDM Consent Manager"><ABDMConsentPage /></SM></RG>} />
@@ -356,6 +378,19 @@ const App = () => (
             <Route path="/admin/go-live" element={<RG path="/admin/go-live"><SM name="Go-Live Checklist"><GoLiveChecklistPage /></SM></RG>} />
             <Route path="/admin/data-migration" element={<RG path="/admin/data-migration"><SM name="Data Migration"><DataMigrationPage /></SM></RG>} />
             <Route path="/design-system" element={<RG path="/design-system"><SM name="Design System"><DesignSystem /></SM></RG>} />
+          </Route>
+
+          {/* ── Aumrti Platform routes (CEO control plane) ── */}
+          <Route path="/platform" element={<SuspenseWrap><PlatformShell /></SuspenseWrap>}>
+            <Route index element={<SuspenseWrap><PlatformDashboard /></SuspenseWrap>} />
+            <Route path="briefing" element={<SuspenseWrap><PlatformBriefingPage /></SuspenseWrap>} />
+            <Route path="churn-radar" element={<SuspenseWrap><ChurnRadarPage /></SuspenseWrap>} />
+            <Route path="hospitals" element={<SuspenseWrap><HospitalsListPage /></SuspenseWrap>} />
+            <Route path="hospitals/:id" element={<SuspenseWrap><HospitalDetailPage /></SuspenseWrap>} />
+            <Route path="plans" element={<SuspenseWrap><PlansManagerPage /></SuspenseWrap>} />
+            <Route path="discounts" element={<SuspenseWrap><DiscountsPage /></SuspenseWrap>} />
+            <Route path="revenue" element={<SuspenseWrap><RevenueDashboardPage /></SuspenseWrap>} />
+            <Route path="settings" element={<SuspenseWrap><PlatformSettingsPage /></SuspenseWrap>} />
           </Route>
 
           <Route path="*" element={<NotFound />} />

@@ -15,6 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useConfigValues } from "@/hooks/useConfigValues";
 import { Play, CheckCircle, ShieldX, Plus, Pencil, Power } from "lucide-react";
 
 interface Props { onRefresh: () => void }
@@ -35,10 +36,10 @@ const STATUS_DOT: Record<string, string> = {
   out_of_service: "bg-red-500",
 };
 
-const COMPLICATIONS = ["Hypotension","Cramps","Nausea/Vomiting","Headache","Chest Pain","Arrhythmia","Dialyzer Reaction","Other"];
 
 const MachineBoardTab: React.FC<Props> = ({ onRefresh }) => {
   const { toast } = useToast();
+  const complicationOptions = useConfigValues("dialysis_complications");
   const [machines, setMachines] = useState<any[]>([]);
   const [activeSessions, setActiveSessions] = useState<Record<string, any>>({});
   const [patients, setPatients] = useState<any[]>([]);
@@ -225,6 +226,9 @@ const MachineBoardTab: React.FC<Props> = ({ onRefresh }) => {
   };
 
   const createDialysisBill = async (session: any, hospitalId: string) => {
+    // Idempotency guard — skip if already billed
+    if (session.billing_status === "billed") return;
+
     const { data: dialysisPatient } = await (supabase as any)
       .from("dialysis_patients")
       .select("patient_id")
@@ -264,21 +268,35 @@ const MachineBoardTab: React.FC<Props> = ({ onRefresh }) => {
         .maybeSingle();
 
       if (ipdBill?.id) {
-        await (supabase as any).from("bill_line_items").insert({
-          hospital_id: hospitalId,
-          bill_id: ipdBill.id,
-          item_type: "dialysis",
-          description: `Dialysis Session — ${sessionDate} (Machine: ${session.machine_id || "N/A"})`,
-          quantity: 1, unit_rate: fee,
-          taxable_amount: fee, gst_percent: gstPct,
-          gst_amount: gst, total_amount: fee + gst,
-          hsn_code: "999316", source_module: "dialysis",
-        });
+        const dedupeKey = `dialysis:session:${session.id}`;
+        const { data: existingItem } = await (supabase as any)
+          .from("bill_line_items")
+          .select("id")
+          .eq("bill_id", ipdBill.id)
+          .eq("source_dedupe_key", dedupeKey)
+          .maybeSingle();
 
-        const result = await recalculateBillTotalsSafe(ipdBill.id);
-        if (!result.ok) {
-          console.error("Dialysis IPD bill recalculation failed:", result.error);
+        if (!existingItem) {
+          await (supabase as any).from("bill_line_items").insert({
+            hospital_id: hospitalId,
+            bill_id: ipdBill.id,
+            item_type: "dialysis",
+            description: `Dialysis Session — ${sessionDate}`,
+            quantity: 1, unit_rate: fee,
+            taxable_amount: fee, gst_percent: gstPct,
+            gst_amount: gst, total_amount: fee + gst,
+            hsn_code: "999316", source_module: "dialysis",
+            source_record_id: session.id,
+            source_dedupe_key: dedupeKey,
+          });
+          const result = await recalculateBillTotalsSafe(ipdBill.id);
+          if (!result.ok) console.error("Dialysis IPD bill recalculation failed:", result.error);
         }
+
+        // Mark session as billed
+        await (supabase as any).from("dialysis_sessions").update({
+          billing_status: "billed", bill_id: ipdBill.id, billed_at: new Date().toISOString(),
+        }).eq("id", session.id);
         return;
       }
     }
@@ -314,8 +332,16 @@ const MachineBoardTab: React.FC<Props> = ({ onRefresh }) => {
         taxable_amount: fee, gst_percent: gstPct,
         gst_amount: gst, total_amount: fee + gst,
         hsn_code: "999316", source_module: "dialysis",
+        source_record_id: session.id,
+        source_dedupe_key: `dialysis:session:${session.id}`,
       });
       await recalculateBillTotalsSafe(newBill.id);
+
+      // Mark session as billed
+      await (supabase as any).from("dialysis_sessions").update({
+        billing_status: "billed", bill_id: newBill.id, billed_at: new Date().toISOString(),
+      }).eq("id", session.id);
+
       toast({ title: `Dialysis billed: ₹${(fee + gst).toLocaleString("en-IN")}` });
 
       const { data: { user: authUser } } = await supabase.auth.getUser();
@@ -662,10 +688,10 @@ const MachineBoardTab: React.FC<Props> = ({ onRefresh }) => {
               <div>
                 <Label className="text-xs">Complications</Label>
                 <div className="flex flex-wrap gap-1.5 mt-1">
-                  {COMPLICATIONS.map(c => (
-                    <Button key={c} size="sm" variant={complications.includes(c) ? "default" : "outline"} className="text-[10px] h-6 px-2"
-                      onClick={() => setComplications(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])}>
-                      {c}
+                  {complicationOptions.map(c => (
+                    <Button key={c.value} size="sm" variant={complications.includes(c.value) ? "default" : "outline"} className="text-[10px] h-6 px-2"
+                      onClick={() => setComplications(prev => prev.includes(c.value) ? prev.filter(x => x !== c.value) : [...prev, c.value])}>
+                      {c.label}
                     </Button>
                   ))}
                 </div>

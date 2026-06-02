@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { callAI } from "@/lib/aiProvider";
+import { autoChargeService, MODULE_MORTUARY } from "@/lib/serviceBilling";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -341,6 +342,20 @@ export default function MortuaryPage() {
     });
     if (e1) { toast.error(e1.message); setLoading(false); return; }
     await supabase.from("mortuary_admissions").update({ status: "released", released_at: new Date().toISOString() }).eq("id", releaseForm.mortuary_id);
+
+    // Auto-bill mortuary services on body release
+    if (mort?.patient_id && hospitalId) {
+      autoChargeService({
+        hospitalId,
+        patientId:     mort.patient_id,
+        serviceName:   `Mortuary Services — Body No: ${mort.body_number}`,
+        serviceModule: MODULE_MORTUARY,
+        sourceTable:   "mortuary_admissions",
+        sourceId:      releaseForm.mortuary_id,
+        serviceDate:   new Date().toISOString().split("T")[0],
+      }).catch(() => {});
+    }
+
     toast.success("Body released — records updated");
     setReleaseModal(false);
     setReleaseForm({ mortuary_id: "", released_to: "", relation: "", id_proof_type: "Aadhaar", id_proof_number: "", police_clearance: false, mccd_issued: false, documents_given: [], witness_name: "" });

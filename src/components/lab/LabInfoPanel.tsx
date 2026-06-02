@@ -78,7 +78,7 @@ const LabInfoPanel: React.FC<Props> = ({ selectedOrder, onSelectOrder, onAddTest
 
   if (!selectedOrder) {
     return (
-      <div className="w-[300px] shrink-0 bg-card border-l border-border flex items-center justify-center">
+      <div className="w-full bg-card border-l border-border flex items-center justify-center">
         <p className="text-sm text-muted-foreground">Patient details appear here</p>
       </div>
     );
@@ -92,7 +92,7 @@ const LabInfoPanel: React.FC<Props> = ({ selectedOrder, onSelectOrder, onAddTest
   const criticalCount = items.filter((i: any) => i.result_flag && ["CH", "CL"].includes(i.result_flag)).length;
 
   return (
-    <div className="w-[300px] shrink-0 bg-card border-l border-border flex flex-col overflow-hidden">
+    <div className="w-full bg-card border-l border-border flex flex-col overflow-hidden">
       {/* Patient Card */}
       <div className="p-4 border-b border-border">
         {patient ? (

@@ -37,7 +37,7 @@ const BedDemandForecastPanel: React.FC<Props> = ({ hospitalId }) => {
   const [loading, setLoading] = useState(false);
   const [forecasts, setForecasts] = useState<DayForecast[]>([]);
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const runForecast = useCallback(async () => {

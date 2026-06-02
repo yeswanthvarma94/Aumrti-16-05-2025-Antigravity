@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { ScanLine } from "lucide-react";
 import RadiologyWorklist from "@/components/radiology/RadiologyWorklist";
+import CollapsiblePanel from "@/components/layout/CollapsiblePanel";
 import NewRadiologyOrderModal from "@/components/radiology/NewRadiologyOrderModal";
 import RadiologyReportingWorkspace from "@/components/radiology/RadiologyReportingWorkspace";
 
@@ -181,25 +182,27 @@ const RadiologyPage: React.FC = () => {
   return (
     <div className="flex h-full overflow-hidden">
       {/* Left: Worklist */}
-      <RadiologyWorklist
-        orders={filteredOrders}
-        modalities={modalities}
-        selectedOrderId={selectedOrderId}
-        onSelectOrder={setSelectedOrderId}
-        filterModality={filterModality}
-        onFilterChange={setFilterModality}
-        selectedDate={selectedDate}
-        onDateChange={setSelectedDate}
-        statCounts={statCounts}
-        onNewOrder={() => setShowNewOrder(true)}
-        pendingOpdOrders={pendingOpdOrders}
-        onCreateFromOpd={(patient, studyNames, encounterId) => {
-          setPendingOrderPatient(patient);
-          setPendingOrderStudyNames(studyNames);
-          setPendingOrderEncounterId(encounterId);
-          setShowNewOrder(true);
-        }}
-      />
+      <CollapsiblePanel panelKey="radiology_worklist" title="Worklist" side="left" expandedWidth="w-[320px]">
+        <RadiologyWorklist
+          orders={filteredOrders}
+          modalities={modalities}
+          selectedOrderId={selectedOrderId}
+          onSelectOrder={setSelectedOrderId}
+          filterModality={filterModality}
+          onFilterChange={setFilterModality}
+          selectedDate={selectedDate}
+          onDateChange={setSelectedDate}
+          statCounts={statCounts}
+          onNewOrder={() => setShowNewOrder(true)}
+          pendingOpdOrders={pendingOpdOrders}
+          onCreateFromOpd={(patient, studyNames, encounterId) => {
+            setPendingOrderPatient(patient);
+            setPendingOrderStudyNames(studyNames);
+            setPendingOrderEncounterId(encounterId);
+            setShowNewOrder(true);
+          }}
+        />
+      </CollapsiblePanel>
 
       {/* Right: Workspace */}
       {selectedOrder && hospitalId ? (

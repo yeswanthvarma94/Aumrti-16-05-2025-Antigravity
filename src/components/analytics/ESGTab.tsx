@@ -10,7 +10,9 @@ import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import { logNABHEvidence } from "@/lib/nabh-evidence";
-import { Leaf, Plus } from "lucide-react";
+import { callAI } from "@/lib/aiProvider";
+import { useHospitalId as useHospId } from "@/hooks/useHospitalId";
+import { Leaf, Plus, Brain, Loader2 } from "lucide-react";
 
 interface Metric {
   id: string; month_year: string;
@@ -112,6 +114,48 @@ const ESGTab: React.FC = () => {
 
   const latest = metrics[metrics.length - 1];
   const totalBMW = latest ? ((latest.bmw_kg_red || 0) + (latest.bmw_kg_yellow || 0) + (latest.bmw_kg_blue || 0) + (latest.bmw_kg_black || 0)) : 0;
+
+  // AI ESG Recommendations
+  const [aiRecs, setAiRecs] = useState<string[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const { hospitalId: hId } = useHospId();
+
+  const getAIRecommendations = async () => {
+    if (!latest || !hId) return;
+    setAiLoading(true);
+    const elecVsTarget = latest.electricity_target ? ((latest.electricity_kwh || 0) / latest.electricity_target * 100).toFixed(0) : "N/A";
+    const waterVsTarget = latest.water_target ? ((latest.water_kl || 0) / latest.water_target * 100).toFixed(0) : "N/A";
+    const bmwVsTarget = latest.bmw_target ? ((totalBMW) / latest.bmw_target * 100).toFixed(0) : "N/A";
+    const solar = latest.solar_kwh || 0;
+    const elec = latest.electricity_kwh || 0;
+    const solarPct = elec > 0 ? ((solar / (elec + solar)) * 100).toFixed(1) : "0";
+    const recycledWater = latest.water_recycled_kl || 0;
+    const totalWater = latest.water_kl || 0;
+
+    const response = await callAI({
+      featureKey: "esg_recommendations",
+      hospitalId: hId,
+      prompt: `You are a hospital sustainability consultant. Analyse this hospital's ESG data and provide 5 specific, actionable recommendations.
+
+LATEST MONTH ESG DATA:
+- Electricity: ${elec.toLocaleString()} kWh (${elecVsTarget}% of target${latest.electricity_target ? `, target: ${latest.electricity_target} kWh` : ""})
+- Solar energy: ${solar.toLocaleString()} kWh (${solarPct}% of total consumption)
+- Diesel used: ${latest.diesel_litres || 0} litres
+- Water consumed: ${totalWater.toLocaleString()} kL (${waterVsTarget}% of target)
+- Water recycled: ${recycledWater.toLocaleString()} kL
+- Biomedical waste: ${totalBMW.toFixed(1)} kg total (target: ${latest.bmw_target || "not set"} kg)
+- Carbon offset: ${latest.carbon_offset_kg || 0} kg
+
+Focus on the biggest gaps vs targets. Give practical hospital-specific recommendations.
+Respond with exactly 5 recommendations, one per line, starting with an action verb. No numbering, no bullets. Just 5 lines.`,
+      maxTokens: 400,
+    });
+
+    if (response.text && !response.error) {
+      setAiRecs(response.text.trim().split("\n").filter(l => l.trim()).slice(0, 5));
+    }
+    setAiLoading(false);
+  };
 
   return (
     <div className="p-4 space-y-5">
@@ -242,6 +286,47 @@ const ESGTab: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* AI ESG Carbon Recommendations — E7 NABH Excellence */}
+      {latest && (
+        <div className="border border-emerald-200 rounded-xl bg-card overflow-hidden">
+          <div className="px-4 py-3 border-b border-emerald-200 bg-emerald-50/40 dark:bg-emerald-950/20 flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-emerald-600" />
+              <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">AI Carbon Reduction Recommendations</span>
+              <span className="text-[10px] border border-emerald-200 bg-emerald-100 text-emerald-700 rounded px-1.5 py-px font-medium">E7 — NABH Excellence</span>
+            </div>
+            <Button size="sm" variant="outline" onClick={getAIRecommendations} disabled={aiLoading}
+              className="h-7 text-xs gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50">
+              {aiLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Brain className="h-3 w-3" />}
+              {aiRecs.length > 0 ? "Refresh Recommendations" : "Get AI Recommendations"}
+            </Button>
+          </div>
+          <div className="p-4">
+            {aiLoading && (
+              <div className="flex items-center gap-2 text-muted-foreground py-4 justify-center">
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                <span className="text-sm">Analysing ESG data…</span>
+              </div>
+            )}
+            {!aiLoading && aiRecs.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                Click "Get AI Recommendations" to receive specific carbon reduction actions based on your latest ESG metrics.
+              </p>
+            )}
+            {!aiLoading && aiRecs.length > 0 && (
+              <ul className="space-y-2">
+                {aiRecs.map((rec, i) => (
+                  <li key={i} className="flex items-start gap-2.5 text-sm">
+                    <span className="mt-0.5 flex-shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="text-foreground">{rec}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

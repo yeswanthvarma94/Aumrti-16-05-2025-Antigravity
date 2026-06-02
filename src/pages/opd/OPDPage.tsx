@@ -6,6 +6,7 @@ import { ChevronLeft } from "lucide-react";
 import TokenQueue from "@/components/opd/TokenQueue";
 import ConsultationWorkspace from "@/components/opd/ConsultationWorkspace";
 import PatientSummary from "@/components/opd/PatientSummary";
+import CollapsiblePanel from "@/components/layout/CollapsiblePanel";
 
 export interface OpdToken {
   id: string;
@@ -40,9 +41,10 @@ const OPDPage: React.FC = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
   const { toast } = useToast();
 
-  const fetchTokens = useCallback(async () => {
+  const fetchTokens = useCallback(async (date?: string) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setLoading(false); return; }
     const { data: userData, error: userErr } = await supabase.from("users").select("id, hospital_id, role").eq("auth_user_id", user.id).maybeSingle();
@@ -51,12 +53,12 @@ const OPDPage: React.FC = () => {
     setHospitalId(userData.hospital_id);
     setUserRole(userData.role);
 
-    const today = new Date().toISOString().split("T")[0];
+    const visitDate = date ?? new Date().toISOString().split("T")[0];
     let query = supabase
       .from("opd_tokens")
       .select("*, patient:patients(full_name, phone, uhid, gender, dob, blood_group, allergies, chronic_conditions, insurance_id, address, abha_id), doctor:users!opd_tokens_doctor_id_fkey(full_name), department:departments(name)")
       .eq("hospital_id", userData.hospital_id)
-      .eq("visit_date", today)
+      .eq("visit_date", visitDate)
       .order("created_at", { ascending: true });
 
     if (userData.role === "doctor") {
@@ -74,6 +76,12 @@ const OPDPage: React.FC = () => {
     setTokens((data as unknown as OpdToken[]) || []);
     setLoading(false);
   }, []);
+
+  const handleDateChange = useCallback((date: string) => {
+    setSelectedDate(date);
+    setLoading(true);
+    fetchTokens(date);
+  }, [fetchTokens]);
 
   useEffect(() => { fetchTokens(); }, [fetchTokens]);
 
@@ -95,7 +103,22 @@ const OPDPage: React.FC = () => {
 
   return (
     <div className="flex h-full overflow-hidden">
-      {showQueue && (
+      {showQueue && !isMobile && (
+        <CollapsiblePanel panelKey="opd_queue" title="OPD Queue" side="left" expandedWidth="w-[280px]">
+          <TokenQueue
+            tokens={tokens}
+            selectedTokenId={selectedTokenId}
+            onSelectToken={(id) => { setSelectedTokenId(id); setShowPatientDetails(false); }}
+            hospitalId={hospitalId}
+            loading={loading}
+            selectedDate={selectedDate}
+            onDateChange={handleDateChange}
+            onTokenCreated={fetchTokens}
+          />
+        </CollapsiblePanel>
+      )}
+      {/* Mobile: show queue without collapse wrapper */}
+      {showQueue && isMobile && (
         <TokenQueue
           tokens={tokens}
           selectedTokenId={selectedTokenId}
@@ -103,6 +126,8 @@ const OPDPage: React.FC = () => {
           hospitalId={hospitalId}
           loading={loading}
           onTokenCreated={fetchTokens}
+          selectedDate={selectedDate}
+          onDateChange={handleDateChange}
         />
       )}
       {showWorkspace && (
@@ -125,7 +150,9 @@ const OPDPage: React.FC = () => {
               onTogglePatientDetails={() => setShowPatientDetails((p) => !p)}
             />
             {!isMobile && showPatientDetails && (
-              <PatientSummary token={selectedToken} hospitalId={hospitalId} onClose={() => setShowPatientDetails(false)} />
+              <CollapsiblePanel panelKey="opd_patient_details" title="Patient Details" side="right" expandedWidth="w-[340px]">
+                <PatientSummary token={selectedToken} hospitalId={hospitalId} onClose={() => setShowPatientDetails(false)} />
+              </CollapsiblePanel>
             )}
           </div>
         </div>

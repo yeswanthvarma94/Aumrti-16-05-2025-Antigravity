@@ -18,6 +18,7 @@ import {
   ClipboardList, Target, AlertCircle,
 } from "lucide-react";
 import ReportEventModal from "@/components/safety/ReportEventModal";
+import AIRootCauseAnalysis from "@/components/quality/AIRootCauseAnalysis";
 import OverdueCAPABanner from "@/components/safety/OverdueCAPABanner";
 import NABHAssistantPanel from "@/components/nabh/NABHAssistantPanel";
 import NABHBadge from "@/components/nabh/NABHBadge";
@@ -1071,6 +1072,24 @@ Respond ONLY as a JSON array of 3 objects:
                         </div>
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* ── AI RCA Panel (appended to RCA tab) ───────────────── */}
+                {detailTab === "rca" && selectedEvent && hospitalId && (
+                  <div className="mt-4 max-w-2xl">
+                    <AIRootCauseAnalysis
+                      incident={{
+                        id: selectedEvent.id,
+                        incident_date: selectedEvent.reported_at?.split("T")[0] || "",
+                        incident_type: selectedEvent.event_type,
+                        severity_level: selectedEvent.severity || "minor",
+                        description: selectedEvent.description,
+                        location: selectedEvent.location ?? undefined,
+                        outcome: selectedEvent.immediate_action_taken ?? undefined,
+                      }}
+                      hospitalId={hospitalId}
+                    />
                   </div>
                 )}
 

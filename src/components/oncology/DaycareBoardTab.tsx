@@ -181,53 +181,100 @@ const DaycareBoardTab: React.FC<DaycareBoardTabProps> = ({ showNewOrder, onClose
   const handleCompleteInfusion = async (chairId: string, orderId?: string) => {
     await (supabase as any).from("daycare_chairs").update({ status: "cleaning", current_patient: null, occupied_since: null, estimated_end: null }).eq("id", chairId);
     if (orderId) {
+      // Idempotency: check if already billed
+      const { data: existingOrder } = await (supabase as any)
+        .from("chemo_orders").select("billing_status, hospital_id, patient_id, admission_id")
+        .eq("id", orderId).maybeSingle();
+
       await (supabase as any).from("chemo_orders").update({ status: "completed" }).eq("id", orderId);
 
-      // Auto-bill chemo on completion
-      const { data: order } = await (supabase as any)
-        .from("chemo_orders")
-        .select("*, chemo_order_drugs(*)")
-        .eq("id", orderId)
-        .maybeSingle();
+      if (existingOrder?.billing_status !== "billed") {
+        const { data: order } = await (supabase as any)
+          .from("chemo_orders")
+          .select("*, chemo_order_drugs(*)")
+          .eq("id", orderId)
+          .maybeSingle();
 
-      if (order?.patient_id) {
-        const { data: user } = await supabase.from("users").select("hospital_id").limit(1).maybeSingle();
-        const hospitalId = user?.hospital_id || order.hospital_id;
-        if (hospitalId) {
-          const totalDrugCost = (order.chemo_order_drugs || [])
-            .reduce((s: number, d: any) => s + (Number(d.planned_dose_mg || 0) * 50), 0);
+        if (order?.patient_id) {
+          const { data: user } = await supabase.from("users").select("hospital_id").limit(1).maybeSingle();
+          const hospitalId = user?.hospital_id || order.hospital_id;
+          const dedupeKey = `oncology:chemo:${orderId}`;
 
-          const billDate = new Date().toISOString().split("T")[0];
-          const billNum = await generateBillNumber(hospitalId, "CHEMO");
+          if (hospitalId) {
+            const totalDrugCost = (order.chemo_order_drugs || [])
+              .reduce((s: number, d: any) => s + (Number(d.planned_dose_mg || 0) * 50), 0);
+            if (totalDrugCost <= 0) {
+              // No cost configured — record for leakage dashboard
+              await (supabase as any).from("service_charges").insert({
+                hospital_id: hospitalId, patient_id: order.patient_id,
+                admission_id: order.admission_id || null,
+                service_module: "oncology",
+                service_ref_id: orderId,
+                service_date: new Date().toISOString().split("T")[0],
+                service_name: `Chemotherapy Cycle ${order.cycle_number || ""}`,
+                quantity: 1, unit_rate: 0, gst_percent: 0, gst_amount: 0, total_amount: 0,
+                billing_status: "unbilled",
+                notes: "Drug cost = 0. Configure chemo drug rates in service master.",
+              }).catch(() => {});
+            } else {
+              const billDate = new Date().toISOString().split("T")[0];
+              const billNum = await generateBillNumber(hospitalId, "CHEMO");
 
-          const { data: chemoBill } = await supabase.from("bills").insert({
-            hospital_id: hospitalId,
-            patient_id: order.patient_id,
-            admission_id: order.admission_id || null,
-            bill_number: billNum,
-            bill_type: "daycare",
-            bill_date: billDate,
-            bill_status: "final",
-            payment_status: "unpaid",
-            total_amount: totalDrugCost,
-            balance_due: totalDrugCost,
-            subtotal: totalDrugCost,
-            taxable_amount: totalDrugCost,
-            patient_payable: totalDrugCost,
-            notes: `Chemotherapy: ${order.cycle_number ? "Cycle " + order.cycle_number : ""}`,
-          }).select("id").maybeSingle();
+              const { data: chemoBill } = await supabase.from("bills").insert({
+                hospital_id: hospitalId,
+                patient_id: order.patient_id,
+                admission_id: order.admission_id || null,
+                bill_number: billNum,
+                bill_type: "daycare",
+                bill_date: billDate,
+                bill_status: "final",
+                payment_status: "unpaid",
+                total_amount: totalDrugCost,
+                balance_due: totalDrugCost,
+                subtotal: totalDrugCost,
+                taxable_amount: totalDrugCost,
+                patient_payable: totalDrugCost,
+                notes: `Chemotherapy: ${order.cycle_number ? "Cycle " + order.cycle_number : ""}`,
+              }).select("id").maybeSingle();
 
-          if (chemoBill) {
-            const { data: { user: authUser } } = await supabase.auth.getUser();
-            await autoPostJournalEntry({
-              triggerEvent: "bill_finalized_oncology",
-              sourceModule: "oncology",
-              sourceId: chemoBill.id,
-              amount: totalDrugCost,
-              description: `Oncology Daycare Revenue - Bill ${billNum}`,
-              hospitalId,
-              postedBy: authUser?.id || "",
-            });
+              if (chemoBill) {
+                // Dedupe guard on line item
+                const { data: existingItem } = await (supabase as any)
+                  .from("bill_line_items").select("id")
+                  .eq("bill_id", chemoBill.id).eq("source_dedupe_key", dedupeKey).maybeSingle();
+
+                if (!existingItem) {
+                  await (supabase as any).from("bill_line_items").insert({
+                    hospital_id: hospitalId, bill_id: chemoBill.id,
+                    item_type: "daycare",
+                    description: `Chemotherapy Cycle ${order.cycle_number || ""} — ${(order.chemo_order_drugs || []).map((d: any) => d.drug_name).join(", ")}`,
+                    quantity: 1, unit_rate: totalDrugCost,
+                    taxable_amount: totalDrugCost, gst_percent: 0,
+                    gst_amount: 0, total_amount: totalDrugCost,
+                    source_module: "oncology",
+                    source_record_id: orderId,
+                    source_dedupe_key: dedupeKey,
+                  });
+                }
+
+                const { data: { user: authUser } } = await supabase.auth.getUser();
+                await autoPostJournalEntry({
+                  triggerEvent: "bill_finalized_oncology",
+                  sourceModule: "oncology",
+                  sourceId: chemoBill.id,
+                  amount: totalDrugCost,
+                  description: `Oncology Daycare Revenue - Bill ${billNum}`,
+                  hospitalId,
+                  postedBy: authUser?.id || "",
+                });
+
+                // Mark chemo_order as billed
+                await (supabase as any).from("chemo_orders").update({
+                  billing_status: "billed", bill_id: chemoBill.id,
+                  billed_at: new Date().toISOString(), billed_amount: totalDrugCost,
+                }).eq("id", orderId);
+              }
+            }
           }
         }
       }

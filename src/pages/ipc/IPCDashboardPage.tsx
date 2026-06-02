@@ -24,6 +24,7 @@ import {
   ShieldCheck, TrendingUp, TrendingDown, Thermometer, Microscope, ClipboardList,
   Brain, CheckCircle2, XCircle, ChevronDown, ChevronUp
 } from "lucide-react";
+import HandHygieneTab from "@/components/ipc/HandHygieneTab";
 import {
   differenceInHours, format, subMonths, subDays,
   startOfMonth, endOfMonth
@@ -871,12 +872,13 @@ Keep each section concise and clinically actionable. Use plain text with numbere
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
           <TabsList className="h-9 rounded-none border-b border-border bg-card px-4 justify-start flex-shrink-0">
             {[
-              { v: "overview", l: "📊 Overview" },
-              { v: "devices",    l: "🔌 Device Log" },
-              { v: "infections", l: "🦠 HAI Events" },
-              { v: "bundles",    l: "✅ Bundle Compliance" },
-              { v: "trends",     l: "📈 Trends" },
-              { v: "ai",         l: "🤖 AI Insights" },
+              { v: "overview",      l: "📊 Overview" },
+              { v: "devices",       l: "🔌 Device Log" },
+              { v: "infections",    l: "🦠 HAI Events" },
+              { v: "bundles",       l: "✅ Bundle Compliance" },
+              { v: "hand_hygiene",  l: "🖐 Hand Hygiene" },
+              { v: "trends",        l: "📈 Trends" },
+              { v: "ai",            l: "🤖 AI Insights" },
             ].map(t => (
               <TabsTrigger key={t.v} value={t.v}
                 className="text-[13px] rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:bg-transparent px-4 h-full"
@@ -1233,6 +1235,11 @@ Keep each section concise and clinically actionable. Use plain text with numbere
                 </ResponsiveContainer>
               </div>
             </div>
+          </TabsContent>
+
+          {/* ── Hand Hygiene ─────────────────────────────────────────────── */}
+          <TabsContent value="hand_hygiene" className="flex-1 overflow-hidden m-0">
+            {hospitalId && <HandHygieneTab hospitalId={hospitalId} />}
           </TabsContent>
 
           {/* ── AI Insights ──────────────────────────────────────────────── */}

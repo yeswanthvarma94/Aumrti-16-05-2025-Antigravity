@@ -112,6 +112,10 @@ export const FEATURE_LABELS: Record<string, string> = {
   pre_auth_ai_fill: "Pre-Auth Auto-Fill (AI)",
   tpa_query_reply: "TPA Query Reply Suggester",
   tpa_name_resolver: "TPA Name Auto-Resolver",
+  readmission_predictor: "Readmission Risk Predictor",
+  ai_rca: "AI Root Cause Analysis",
+  staff_burnout: "Staff Burnout Risk Monitor",
+  esg_recommendations: "ESG Carbon Recommendations (AI)",
 };
 
 export const PROVIDER_TO_SERVICE_KEY: Record<string, string> = {

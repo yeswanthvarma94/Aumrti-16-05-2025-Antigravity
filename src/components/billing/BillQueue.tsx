@@ -5,6 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Receipt, Plus, IndianRupee } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
 import type { BillRecord } from "@/pages/billing/BillingPage";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasActionAccess } from "@/lib/tabPermissions";
 
 const STATUS_FILTERS = [
   { key: "all", label: "All" },
@@ -60,15 +62,19 @@ const BillQueue: React.FC<Props> = ({
   statusFilter, onStatusFilter, dateFilter, onDateFilter,
   startDate, endDate, onStartDate, onEndDate,
   onNewBill, onAdvanceReceipt, todayCollection, pendingAmount, billCount,
-}) => (
-  <aside className="w-80 flex-shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
+}) => {
+  const { permissions, role } = useHospitalContext();
+  return (
+  <aside className="w-full bg-card border-r border-border flex flex-col overflow-hidden">
     {/* Header */}
     <div className="px-4 py-3 border-b border-border flex-shrink-0">
       <div className="flex items-center justify-between">
         <span className="text-sm font-bold text-foreground">Bills</span>
-        <Button size="sm" className="h-7 text-[11px] gap-1" onClick={onNewBill}>
-          <Plus size={14} /> New Bill
-        </Button>
+        {hasActionAccess("billing", "new_bill", permissions, role) && (
+          <Button size="sm" className="h-7 text-[11px] gap-1" onClick={onNewBill}>
+            <Plus size={14} /> New Bill
+          </Button>
+        )}
       </div>
       <div className="flex gap-1.5 mt-2 overflow-x-auto">
         {STATUS_FILTERS.map((f) => (
@@ -137,8 +143,8 @@ const BillQueue: React.FC<Props> = ({
           icon="🧾"
           title="No bills for this period"
           description="Bills created from OPD, IPD, and emergency appear here"
-          actionLabel="+ Create Bill"
-          onAction={onNewBill}
+          actionLabel={hasActionAccess("billing", "new_bill", permissions, role) ? "+ Create Bill" : undefined}
+          onAction={hasActionAccess("billing", "new_bill", permissions, role) ? onNewBill : undefined}
         />
       ) : (
         bills.map((bill) => {
@@ -230,6 +236,7 @@ const BillQueue: React.FC<Props> = ({
       </Button>
     </div>
   </aside>
-);
+  );
+};
 
 export default BillQueue;

@@ -6,7 +6,7 @@ import {
   Building2, ClipboardList, Send, BarChart3, CalendarClock,
   Settings2, Layers, ShieldCheck, MessageSquare, Bot, SlidersHorizontal,
   TrendingUp, Bell, PieChart, Zap, RefreshCw, ChevronDown, ChevronUp,
-  AlertTriangle, IndianRupee, ShieldAlert, Sparkles, Lock, CheckCircle2,
+  AlertTriangle, IndianRupee, ShieldAlert, Sparkles, Lock, CheckCircle2, Scale,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { differenceInMinutes, differenceInDays } from "date-fns";
+import { differenceInMinutes } from "date-fns";
 import ActiveAdmissions from "@/components/insurance/ActiveAdmissions";
 import PreAuthQueue from "@/components/insurance/PreAuthQueue";
 import ClaimsToSubmit from "@/components/insurance/ClaimsToSubmit";
@@ -34,6 +34,7 @@ import ArogyasriTab from "@/components/insurance/ArogyasriTab";
 import DenialAnalyticsDashboard from "@/components/insurance/DenialAnalyticsDashboard";
 import HCXClaimsTab from "@/components/insurance/HCXClaimsTab";
 import PaymentReconciliation from "@/components/insurance/PaymentReconciliation";
+import TpaDisputePanel from "@/components/insurance/TpaDisputePanel";
 
 // ── Plan Context ───────────────────────────────────────────────────────────────
 // Exported so child components can consume it instead of loading settings again.
@@ -87,6 +88,7 @@ const navGroups = [
       { key: "ageing",          label: "TPA Ageing",        icon: CalendarClock, roles: null },
       { key: "unified",         label: "Unified View",      icon: Layers,        roles: null },
       { key: "reconciliation",  label: "Reconciliation",    icon: IndianRupee,   roles: null },
+      { key: "disputes",        label: "TPA Disputes",      icon: Scale,         roles: null },
     ],
   },
   {
@@ -191,7 +193,7 @@ interface KpiCardProps {
   loading?:   boolean;
 }
 
-const KpiCard: React.FC<KpiCardProps> = ({
+const KpiCard = React.memo<KpiCardProps>(({
   label, value, sub, valueClass, alert, pulse, onClick, loading,
 }) => (
   <div
@@ -224,7 +226,7 @@ const KpiCard: React.FC<KpiCardProps> = ({
       : sub && <p className="text-[10px] text-muted-foreground mt-0.5 leading-none">{sub}</p>
     }
   </div>
-);
+));
 
 const KpiDivider: React.FC = () => (
   <div className="w-px bg-border/50 self-stretch my-1 mx-1" />
@@ -497,196 +499,38 @@ const InsurancePage: React.FC = () => {
     return { fromISO: from.toISOString(), toISO: to.toISOString() };
   }, [dateRange, customFrom, customTo]);
 
-  // ── KPI loader ───────────────────────────────────────────────────────────
+  // ── KPI loader — single RPC call replaces 20 round-trips ────────────────
 
   const loadKPIs = useCallback(async () => {
     if (!hospitalId) return;
     setKpiLoading(true);
     setKpiError(null);
-
     try {
       const { fromISO, toISO } = getDateBounds();
-      const nowISO = new Date().toISOString();
-
-      // 1. Pre-auth pending (occupied beds filter)
-      const { data: occupiedAdms } = await (supabase as any)
-        .from("admissions").select("id, beds!inner(status)")
-        .eq("hospital_id", hospitalId).eq("status", "active").neq("insurance_type", "self_pay");
-
-      const occupiedAdmIds: string[] = (occupiedAdms ?? [])
-        .filter((a: any) => a.beds?.status === "occupied").map((a: any) => a.id as string);
-
-      let paRows: any[] = [];
-      const paFields = "id, sla_deadline, sla_breached";
-      if (occupiedAdmIds.length > 0) {
-        const { data } = await (supabase as any)
-          .from("insurance_pre_auth").select(paFields).eq("hospital_id", hospitalId)
-          .in("status", ["pending", "submitted", "under_review"])
-          .or(`admission_id.is.null,admission_id.in.(${occupiedAdmIds.join(",")})`);
-        paRows = data ?? [];
-      } else {
-        const { data } = await (supabase as any)
-          .from("insurance_pre_auth").select(paFields).eq("hospital_id", hospitalId)
-          .in("status", ["pending", "submitted", "under_review"]).is("admission_id", null);
-        paRows = data ?? [];
-      }
-
-      const pendingPreAuth = paRows.length;
-      const slaAtRisk = paRows.filter((p: any) => {
-        if (!p.sla_deadline || p.sla_breached) return false;
-        const m = differenceInMinutes(new Date(p.sla_deadline), new Date());
-        return m >= 0 && m < 30;
-      }).length;
-
-      // 2. Claims outstanding — FIXED: only submitted + under_review
-      const { data: outstandingData } = await (supabase as any)
-        .from("insurance_claims").select("id, claimed_amount")
-        .eq("hospital_id", hospitalId).in("status", ["submitted", "under_review"]);
-
-      const outstandingAmount = (outstandingData ?? []).reduce((s: number, c: any) => s + Number(c.claimed_amount ?? 0), 0);
-      const outstandingCount  = outstandingData?.length ?? 0;
-
-      // 3. Denied count + denial rate
-      const [deniedRes, resolvedRes] = await Promise.all([
-        (supabase as any).from("insurance_claims").select("id", { count: "exact", head: true })
-          .eq("hospital_id", hospitalId).eq("status", "rejected")
-          .gte("created_at", fromISO).lte("created_at", toISO),
-        (supabase as any).from("insurance_claims").select("id", { count: "exact", head: true })
-          .eq("hospital_id", hospitalId).in("status", ["approved", "rejected"])
-          .gte("created_at", fromISO).lte("created_at", toISO),
-      ]);
-      const deniedCount   = deniedRes.count  ?? 0;
-      const resolvedCount = resolvedRes.count ?? 0;
-      const denialRate    = resolvedCount > 0 ? Math.round((deniedCount / resolvedCount) * 100) : 0;
-
-      // 4. TPA queries overdue
-      const { count: overdueCount } = await (supabase as any)
-        .from("tpa_queries").select("id", { count: "exact", head: true })
-        .eq("hospital_id", hospitalId)
-        .not("status", "in", '("responded","replied","closed")')
-        .not("response_deadline", "is", null)
-        .lt("response_deadline", nowISO);
-
-      // 5. Supplementary required
-      let supplementaryNeeded = 0;
-      try {
-        const { count: suppCount } = await (supabase as any)
-          .from("insurance_pre_auth").select("id", { count: "exact", head: true })
-          .eq("hospital_id", hospitalId).eq("supplementary_required", true)
-          .not("status", "in", '("approved","rejected")');
-        supplementaryNeeded = suppCount ?? 0;
-      } catch { /* column may not exist on older DBs */ }
-
-      // Bill utilization ≥ 80% detection
-      try {
-        const { data: approvedPAs } = await (supabase as any)
-          .from("insurance_pre_auth").select("id, admission_id, approved_amount")
-          .eq("hospital_id", hospitalId).eq("status", "approved")
-          .gt("approved_amount", 0).not("admission_id", "is", null);
-
-        if (approvedPAs?.length) {
-          const admIds = approvedPAs.map((p: any) => p.admission_id);
-          const { data: billData } = await (supabase as any)
-            .from("bills").select("admission_id, total_amount")
-            .in("admission_id", admIds).neq("bill_status", "cancelled");
-
-          const billMap: Record<string, number> = {};
-          for (const b of billData ?? []) {
-            billMap[b.admission_id] = (billMap[b.admission_id] ?? 0) + Number(b.total_amount ?? 0);
-          }
-          const overThreshold = (approvedPAs as any[]).filter(p => {
-            const t = billMap[p.admission_id] ?? 0;
-            return t > 0 && t / Number(p.approved_amount) >= 0.8;
-          }).length;
-          supplementaryNeeded = Math.max(supplementaryNeeded, overThreshold);
-        }
-      } catch { /* bills table may not exist */ }
-
-      // 6. Performance metrics
-      let avgPreAuthMinutes: number | null = null;
-      try {
-        const { data: paTimeData } = await (supabase as any)
-          .from("insurance_pre_auth").select("created_at, submitted_at")
-          .eq("hospital_id", hospitalId).not("submitted_at", "is", null)
-          .gte("created_at", fromISO).lte("created_at", toISO).limit(300);
-        const times: number[] = (paTimeData ?? [])
-          .map((p: any) => differenceInMinutes(new Date(p.submitted_at), new Date(p.created_at)))
-          .filter((t: number) => t >= 0 && t < 14400);
-        if (times.length > 0)
-          avgPreAuthMinutes = Math.round(times.reduce((s, t) => s + t, 0) / times.length);
-      } catch { /* ignore */ }
-
-      let firstPassRate: number | null = null;
-      try {
-        const [fpA, fpR] = await Promise.all([
-          (supabase as any).from("insurance_pre_auth").select("id", { count: "exact", head: true })
-            .eq("hospital_id", hospitalId).eq("status", "approved").gte("created_at", fromISO).lte("created_at", toISO),
-          (supabase as any).from("insurance_pre_auth").select("id", { count: "exact", head: true })
-            .eq("hospital_id", hospitalId).eq("status", "rejected").gte("created_at", fromISO).lte("created_at", toISO),
-        ]);
-        const a = fpA.count ?? 0, r = fpR.count ?? 0;
-        if (a + r > 0) firstPassRate = Math.round((a / (a + r)) * 100);
-      } catch { /* ignore */ }
-
-      let avgSettlementDays: number | null = null;
-      try {
-        const { data: settledData } = await (supabase as any)
-          .from("insurance_claims").select("submitted_at")
-          .eq("hospital_id", hospitalId).eq("status", "approved")
-          .not("submitted_at", "is", null).gte("created_at", fromISO).lte("created_at", toISO).limit(200);
-        if (settledData?.length) {
-          const days = (settledData as any[]).map((c) => differenceInDays(new Date(), new Date(c.submitted_at)));
-          avgSettlementDays = Math.round(days.reduce((s, d) => s + d, 0) / days.length);
-        }
-      } catch { /* ignore */ }
-
-      let underpaymentAmount = 0;
-      try {
-        const { data: underpayData } = await (supabase as any)
-          .from("insurance_claims").select("underpayment_amount")
-          .eq("hospital_id", hospitalId).eq("reconciled", false).gt("underpayment_amount", 0);
-        underpaymentAmount = (underpayData ?? []).reduce((s: number, c: any) => s + Number(c.underpayment_amount ?? 0), 0);
-      } catch { /* column added by migration */ }
-
-      let recoveryRate: number | null = null;
-      try {
-        const { data: recoveryData } = await (supabase as any)
-          .from("insurance_claims").select("claimed_amount, settled_amount")
-          .eq("hospital_id", hospitalId).gt("settled_amount", 0)
-          .gte("created_at", fromISO).lte("created_at", toISO);
-        const totalClaimed = (recoveryData ?? []).reduce((s: number, c: any) => s + Number(c.claimed_amount ?? 0), 0);
-        const totalSettled = (recoveryData ?? []).reduce((s: number, c: any) => s + Number(c.settled_amount  ?? 0), 0);
-        if (totalClaimed > 0) recoveryRate = Math.round((totalSettled / totalClaimed) * 100);
-      } catch { /* ignore */ }
-
-      // Sidebar badges + automation %
-      const [enhRes, intimRes, autoHandledRes, totalInsAdmRes] = await Promise.all([
-        (supabase as any).from("insurance_enhancement_requests")
-          .select("id", { count: "exact", head: true }).eq("hospital_id", hospitalId).eq("status", "pending"),
-        (supabase as any).from("insurance_intimations")
-          .select("id", { count: "exact", head: true }).eq("hospital_id", hospitalId).in("status", ["failed", "pending"]),
-        (supabase as any).from("insurance_automation_log")
-          .select("id", { count: "exact", head: true }).eq("hospital_id", hospitalId)
-          .eq("event_type", "intimation_auto_sent").gte("created_at", fromISO),
-        supabase.from("admissions").select("id", { count: "exact", head: true })
-          .eq("hospital_id", hospitalId).neq("insurance_type", "self_pay").gte("admitted_at", fromISO),
-      ]);
-
-      const autoHandled   = autoHandledRes?.count ?? 0;
-      const totalInsAdms  = totalInsAdmRes?.count  ?? 0;
-      const automationPct = totalInsAdms > 0 ? Math.round((autoHandled / totalInsAdms) * 100) : 0;
-
-      setPendingEnhancements(enhRes?.count  ?? 0);
-      setFailedIntimations  (intimRes?.count ?? 0);
+      const { data, error } = await (supabase as any).rpc("get_insurance_kpis", {
+        p_hospital_id: hospitalId,
+        p_from_ts:     fromISO,
+        p_to_ts:       toISO,
+      });
+      if (error) throw error;
+      const d = data as any;
+      setPendingEnhancements(d.pendingEnhancements ?? 0);
+      setFailedIntimations  (d.failedIntimations   ?? 0);
       setKpiData({
-        pendingPreAuth, slaAtRisk,
-        outstandingCount, outstandingAmount,
-        deniedCount, denialRate,
-        overdueQueries: overdueCount ?? 0,
-        supplementaryNeeded,
-        avgPreAuthMinutes, firstPassRate,
-        avgSettlementDays, underpaymentAmount,
-        recoveryRate, automationPct,
+        pendingPreAuth:      d.pendingPreAuth      ?? 0,
+        slaAtRisk:           d.slaAtRisk           ?? 0,
+        outstandingCount:    d.outstandingCount    ?? 0,
+        outstandingAmount:   Number(d.outstandingAmount ?? 0),
+        deniedCount:         d.deniedCount         ?? 0,
+        denialRate:          d.denialRate          ?? 0,
+        overdueQueries:      d.overdueQueries      ?? 0,
+        supplementaryNeeded: d.supplementaryNeeded ?? 0,
+        avgPreAuthMinutes:   d.avgPreAuthMinutes   ?? null,
+        firstPassRate:       d.firstPassRate       ?? null,
+        avgSettlementDays:   d.avgSettlementDays   ?? null,
+        underpaymentAmount:  Number(d.underpaymentAmount ?? 0),
+        recoveryRate:        d.recoveryRate        ?? null,
+        automationPct:       d.automationPct       ?? 0,
       });
       setLastRefreshed(new Date());
     } catch (err: any) {
@@ -700,13 +544,11 @@ const InsurancePage: React.FC = () => {
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
+  // One-time per-hospital init (role, flags, plan tier) — does NOT call loadKPIs
+  // to avoid double-firing with the effect below.
   useEffect(() => {
     if (!hospitalId) return;
 
-    // Load KPIs
-    loadKPIs();
-
-    // User role
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return;
       (supabase as any).from("users").select("role")
@@ -714,17 +556,17 @@ const InsurancePage: React.FC = () => {
         .then(({ data }: { data: any }) => { if (data?.role) setUserRole(data.role); });
     });
 
-    // HCX feature flag
     (supabase as any).from("hospital_abdm_config").select("feature_hcx_claims")
       .eq("hospital_id", hospitalId).maybeSingle()
       .then(({ data }: { data: any }) => setHcxEnabled(!!(data?.feature_hcx_claims)));
 
-    // Plan tier (shared via context)
     (supabase as any).from("hospital_insurance_settings").select("plan_tier")
       .eq("hospital_id", hospitalId).maybeSingle()
       .then(({ data }: { data: any }) => { if (data?.plan_tier) setPlanTier(data.plan_tier); });
-  }, [hospitalId, loadKPIs]);
+  }, [hospitalId]);
 
+  // Fires on mount, hospitalId change, and date-range change (loadKPIs identity changes).
+  // Single source of truth for KPI loads — no double-fire.
   useEffect(() => { loadKPIs(); }, [loadKPIs]);
   useInterval(loadKPIs, REFRESH_INTERVAL_MS);
 
@@ -776,7 +618,7 @@ const InsurancePage: React.FC = () => {
       case "preauth":           return <PreAuthQueue initialAdmission={pendingAdmission} onAdmissionHandled={() => setPendingAdmission(null)} />;
       case "submit":            return <ClaimsToSubmit />;
       case "status":            return <ClaimsStatus />;
-      case "denial":            return <ClaimsStatus />;    // Denial Management — same component, user filters to "rejected"
+      case "denial":            return <ClaimsStatus initialFilter="rejected" />;
       case "ageing":            return <TPAAgeing />;
       case "unified":           return <UnifiedAgeingView />;
       case "cghs_echs":         return <CGHSECHSTab />;
@@ -791,6 +633,7 @@ const InsurancePage: React.FC = () => {
       case "analytics":         return <DenialAnalyticsDashboard />;
       case "hcx":               return <HCXClaimsTab />;
       case "reconciliation":    return <PaymentReconciliation />;
+      case "disputes":          return <TpaDisputePanel />;
       default:                  return null;
     }
   };

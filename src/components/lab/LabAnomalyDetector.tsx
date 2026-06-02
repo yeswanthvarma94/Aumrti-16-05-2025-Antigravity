@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { callAI } from "@/lib/aiProvider";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ interface Props {
     reference_range: string | null;
   }>;
   orderId: string;
+  autoRun?: boolean;
 }
 
 const SEVERITY_STYLE: Record<string, string> = {
@@ -37,10 +38,11 @@ const SEVERITY_STYLE: Record<string, string> = {
   informational: "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/20 dark:border-blue-800",
 };
 
-const LabAnomalyDetector: React.FC<Props> = ({ patientId, hospitalId, currentResults, orderId }) => {
+const LabAnomalyDetector: React.FC<Props> = ({ patientId, hospitalId, currentResults, orderId, autoRun = false }) => {
   const [loading, setLoading] = useState(false);
   const [anomalies, setAnomalies] = useState<Anomaly[] | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const hasAutoRun = useRef(false);
 
   const runDetection = async () => {
     setLoading(true);
@@ -131,6 +133,14 @@ Provide max 4 anomalies, most critical first. Focus on actionable clinical insig
     }
     setLoading(false);
   };
+
+  // Auto-trigger once when autoRun=true and results are present
+  useEffect(() => {
+    if (autoRun && !hasAutoRun.current && currentResults.some(r => r.result_value) && !loading && anomalies === null) {
+      hasAutoRun.current = true;
+      runDetection();
+    }
+  }, [autoRun, currentResults]);
 
   const validResults = currentResults.filter((r) => r.result_value);
   if (validResults.length === 0) return null;

@@ -141,6 +141,12 @@ export default function PanchakarmaTab({ showNew, onShowNewDone }: Props) {
 
   const completeSession = async () => {
     if (!selectedSchedule) return;
+    // Idempotency guard
+    if ((selectedSchedule as any).billed) {
+      toast.success("Session already completed & billed");
+      setShowCompleteModal(false);
+      return;
+    }
     setSaving(true);
     try {
       const { error } = await supabase.from("panchakarma_schedules").update({
@@ -163,6 +169,7 @@ export default function PanchakarmaTab({ showNew, onShowNewDone }: Props) {
         const { data: userData } = await supabase.auth.getUser();
         const { data: userRow } = await supabase.from("users").select("hospital_id").eq("auth_user_id", userData?.user?.id).maybeSingle();
         const hospitalId = userRow?.hospital_id;
+        const dedupeKey = `ayush:session:${selectedSchedule.id}`;
 
         if (hospitalId) {
           const { data: rate } = await (supabase as any)
@@ -179,7 +186,7 @@ export default function PanchakarmaTab({ showNew, onShowNewDone }: Props) {
           const today = new Date().toISOString().split("T")[0];
           const billNum = await generateBillNumber(hospitalId, "AYSH");
 
-          await supabase.from("bills").insert({
+          const { data: newBill } = await supabase.from("bills").insert({
             hospital_id: hospitalId,
             patient_id: session.patient_id,
             bill_number: billNum,
@@ -191,19 +198,38 @@ export default function PanchakarmaTab({ showNew, onShowNewDone }: Props) {
             balance_due: fee + gst,
             subtotal: fee, gst_amount: gst,
             taxable_amount: fee, patient_payable: fee + gst,
-          }).select("id").maybeSingle().then(async ({ data: newBill }) => {
-            if (newBill) {
-              await autoPostJournalEntry({
-                triggerEvent: "bill_finalized_ayush",
-                sourceModule: "ayush",
-                sourceId: newBill.id,
-                amount: fee + gst,
-                description: `AYUSH Revenue - Bill ${billNum}`,
-                hospitalId,
-                postedBy: userData?.user?.id || "",
+          }).select("id").maybeSingle();
+
+          if (newBill) {
+            // Check dedupe before inserting line item
+            const { data: existingItem } = await (supabase as any)
+              .from("bill_line_items").select("id")
+              .eq("bill_id", newBill.id).eq("source_dedupe_key", dedupeKey).maybeSingle();
+
+            if (!existingItem) {
+              await (supabase as any).from("bill_line_items").insert({
+                hospital_id: hospitalId, bill_id: newBill.id,
+                item_type: "ayush",
+                description: `AYUSH Panchakarma: ${session.procedure_type?.replace(/_/g, " ") || "Session"}`,
+                quantity: 1, unit_rate: fee,
+                taxable_amount: fee, gst_percent: gstPct,
+                gst_amount: gst, total_amount: fee + gst,
+                source_module: "ayush",
+                source_record_id: selectedSchedule.id,
+                source_dedupe_key: dedupeKey,
               });
             }
-          });
+
+            await autoPostJournalEntry({
+              triggerEvent: "bill_finalized_ayush",
+              sourceModule: "ayush",
+              sourceId: newBill.id,
+              amount: fee + gst,
+              description: `AYUSH Revenue - Bill ${billNum}`,
+              hospitalId,
+              postedBy: userData?.user?.id || "",
+            });
+          }
         }
       }
 

@@ -19,6 +19,7 @@ import AppealLetterModal, { type AppealClaim } from "./AppealLetterModal";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { formatINR } from "@/lib/currency";
 import { AlertTriangle, Loader2 } from "lucide-react";
+import { useConfigValues } from "@/hooks/useConfigValues";
 
 interface Claim {
   id: string;
@@ -48,7 +49,6 @@ interface Claim {
 
 const statusOptions = ["all", "submitted", "under_review", "approved", "partially_approved", "rejected", "settled", "written_off"];
 
-const DENIAL_CATEGORIES = ["documentation_missing", "clinical_not_justified", "policy_exclusion", "duplicate_claim", "technical_error", "other"];
 const DENIAL_COLORS = ["hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))", "hsl(var(--chart-4))", "hsl(var(--chart-5))", "hsl(var(--destructive))"];
 
 function irdaiBadge(claim: Claim): React.ReactNode {
@@ -85,19 +85,16 @@ function resubmitDeadlineBadge(claim: Claim): React.ReactNode {
   return <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300 bg-amber-50">Resubmit by {format(new Date(base), "dd/MM/yy")}</Badge>;
 }
 
-const REJECTION_CODES = [
-  { value: "not_medically_necessary", label: "Not Medically Necessary" },
-  { value: "policy_exclusion",        label: "Policy Exclusion" },
-  { value: "pre_auth_not_obtained",   label: "Pre-Auth Not Obtained" },
-  { value: "incorrect_icd_code",      label: "Incorrect ICD Code" },
-  { value: "document_deficiency",     label: "Document Deficiency" },
-  { value: "duplicate_claim",         label: "Duplicate Claim" },
-  { value: "other",                   label: "Other" },
-];
 
-const ClaimsStatus: React.FC = () => {
+interface ClaimsStatusProps {
+  initialFilter?: string;
+}
+
+const ClaimsStatus: React.FC<ClaimsStatusProps> = ({ initialFilter = "all" }) => {
+  const rejectionCodeOptions    = useConfigValues("claim_rejection_codes");
+  const denialCategoryOptions   = useConfigValues("claim_denial_categories");
   const [claims, setClaims] = useState<Claim[]>([]);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState(initialFilter);
   const [loading, setLoading] = useState(true);
   const [planTier, setPlanTier] = useState("manual");
   const [appealClaim, setAppealClaim] = useState<Claim | null>(null);
@@ -463,7 +460,7 @@ const ClaimsStatus: React.FC = () => {
                 <Select value={rejectionCode} onValueChange={v => { setRejectionCode(v); setDenialCategory(v); }}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Select rejection reason code" /></SelectTrigger>
                   <SelectContent>
-                    {REJECTION_CODES.map(r => (
+                    {rejectionCodeOptions.map(r => (
                       <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -737,8 +734,8 @@ const RecordTPADecisionModal: React.FC<{
                 <Select value={denialCategory} onValueChange={setDenialCategory}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Select category" /></SelectTrigger>
                   <SelectContent>
-                    {DENIAL_CATEGORIES.map(cat => (
-                      <SelectItem key={cat} value={cat}>{cat.replace(/_/g, " ")}</SelectItem>
+                    {denialCategoryOptions.map(cat => (
+                      <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

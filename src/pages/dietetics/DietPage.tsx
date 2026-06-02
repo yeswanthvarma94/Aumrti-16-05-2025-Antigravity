@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { logNABHEvidence } from "@/lib/nabh-evidence";
 import { supabase } from "@/integrations/supabase/client";
+import { autoChargeService, MODULE_DIETETICS } from "@/lib/serviceBilling";
 import { callAI } from "@/lib/aiProvider";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -223,6 +224,16 @@ const DietPage: React.FC = () => {
         severity: "medium",
       } as any);
     }
+
+    // Auto-bill dietitian screening consultation
+    autoChargeService({
+      hospitalId,
+      patientId:     selectedPatient.patient_id,
+      admissionId:   selectedPatient.id,   // nutritional screenings are always for admitted patients
+      serviceName:   `Dietitian Assessment — NRS-2002 (Risk: ${riskLevel.replace("_"," ")})`,
+      serviceModule: MODULE_DIETETICS,
+      serviceDate:   new Date().toISOString().split("T")[0],
+    }).catch(() => {});
 
     toast.success(`Screening saved — ${riskLevel.replace("_", " ")} risk`);
     setSelectedPatient(null);

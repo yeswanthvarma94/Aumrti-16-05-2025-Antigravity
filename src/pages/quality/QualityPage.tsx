@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { BarChart3, Target, CalendarDays, AlertTriangle, RefreshCw, Bug, FlaskConical, Archive, ClipboardCheck, ShieldAlert, ClipboardList, TrendingUp, Building2 } from "lucide-react";
+import { BarChart3, Target, CalendarDays, AlertTriangle, RefreshCw, Bug, FlaskConical, Archive, ClipboardCheck, ShieldAlert, ClipboardList, TrendingUp, Building2, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,7 @@ import InfectionControlTab from "@/components/quality/InfectionControlTab";
 import AntibioticStewardshipTab from "@/components/quality/AntibioticStewardshipTab";
 import FileIncidentModal from "@/components/quality/FileIncidentModal";
 import ScheduleAuditModal from "@/components/quality/ScheduleAuditModal";
+import PainManagementTab from "@/components/quality/PainManagementTab";
 
 const navTabs = [
   { id: "nabh", label: "NABH Dashboard", emoji: "📊" },
@@ -24,6 +25,7 @@ const navTabs = [
   { id: "capa", label: "CAPA Tracker", emoji: "🔄" },
   { id: "infection", label: "Infection Control", emoji: "🦠" },
   { id: "antibiotic", label: "Antibiotic Stewardship", emoji: "💊" },
+  { id: "pain",       label: "Pain Management",        emoji: "🩹" },
 ];
 
 const QualityPage: React.FC = () => {
@@ -91,6 +93,7 @@ const QualityPage: React.FC = () => {
       case "capa": return <CAPATrackerTab />;
       case "infection": return <InfectionControlTab />;
       case "antibiotic": return <AntibioticStewardshipTab />;
+      case "pain": return hospitalId ? <PainManagementTab hospitalId={hospitalId} /> : null;
       default: return null;
     }
   };

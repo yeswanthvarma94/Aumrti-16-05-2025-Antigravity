@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
+import { useConfigValues } from "@/hooks/useConfigValues";
 import { cn } from "@/lib/utils";
 import AttendanceCalendarView from "./AttendanceCalendarView";
 
@@ -36,7 +37,6 @@ interface ParsedImportRow {
   matched: boolean;
 }
 
-const statusOptions = ["present", "absent", "half_day", "late", "on_leave", "holiday"];
 const statusColors: Record<string, string> = {
   present:  "bg-success/10 text-success",
   absent:   "bg-destructive/10 text-destructive",
@@ -231,6 +231,7 @@ const BiometricImportDialog: React.FC<{
 
 // ── Main Component ─────────────────────────────────────────────────────────
 const AttendanceTab: React.FC = () => {
+  const attendanceStatusOptions = useConfigValues("attendance_statuses");
   const { toast } = useToast();
   const { hospitalId } = useHospitalId();
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
@@ -417,8 +418,8 @@ const AttendanceTab: React.FC = () => {
                         <SelectValue placeholder="Mark" />
                       </SelectTrigger>
                       <SelectContent>
-                        {statusOptions.map((s) => (
-                          <SelectItem key={s} value={s} className="text-xs capitalize">{s.replace("_", " ")}</SelectItem>
+                        {attendanceStatusOptions.map((s) => (
+                          <SelectItem key={s.value} value={s.value} className="text-xs">{s.label}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>

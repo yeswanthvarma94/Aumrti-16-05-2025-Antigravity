@@ -8,7 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import {
   Wrench, ShieldAlert, Trash2, FlaskConical, Package, Plus,
   Loader2, X, AlertTriangle, CheckCircle2, ExternalLink, ChevronDown, ChevronRight, Printer,
+  Flame, Wind, Zap,
 } from "lucide-react";
+import FireSafetyTab from "@/components/fms/FireSafetyTab";
+import MedicalGasTab from "@/components/fms/MedicalGasTab";
+import ElectricalSafetyTab from "@/components/fms/ElectricalSafetyTab";
 import { cn } from "@/lib/utils";
 import { format, parseISO, isPast, differenceInDays, startOfMonth, endOfMonth } from "date-fns";
 
@@ -1363,10 +1367,13 @@ const BmwTab: React.FC<{ hospitalId: string }> = ({ hospitalId }) => {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const navTabs = [
-  { id: "assets",      label: "Assets",         icon: Package },
-  { id: "maintenance", label: "Maintenance",     icon: Wrench },
-  { id: "safety",      label: "Safety Rounds",  icon: ShieldAlert },
-  { id: "bmw",         label: "BMW Manifests",  icon: FlaskConical },
+  { id: "assets",       label: "Assets",            icon: Package },
+  { id: "maintenance",  label: "Maintenance",        icon: Wrench },
+  { id: "safety",       label: "Safety Rounds",      icon: ShieldAlert },
+  { id: "bmw",          label: "BMW Manifests",      icon: FlaskConical },
+  { id: "fire_safety",  label: "Fire Safety",        icon: Flame },
+  { id: "medical_gas",  label: "Medical Gas",        icon: Wind },
+  { id: "electrical",   label: "Electrical Safety",  icon: Zap },
 ];
 
 const FMSDashboardPage: React.FC = () => {
@@ -1403,10 +1410,13 @@ const FMSDashboardPage: React.FC = () => {
   const renderContent = () => {
     if (!hospitalId) return null;
     switch (activeTab) {
-      case "assets":      return <AssetsTab      hospitalId={hospitalId} />;
-      case "maintenance": return <MaintenanceTab  hospitalId={hospitalId} />;
-      case "safety":      return <SafetyRoundsTab hospitalId={hospitalId} />;
-      case "bmw":         return <BmwTab          hospitalId={hospitalId} />;
+      case "assets":      return <AssetsTab         hospitalId={hospitalId} />;
+      case "maintenance": return <MaintenanceTab    hospitalId={hospitalId} />;
+      case "safety":      return <SafetyRoundsTab   hospitalId={hospitalId} />;
+      case "bmw":         return <BmwTab            hospitalId={hospitalId} />;
+      case "fire_safety": return <FireSafetyTab     hospitalId={hospitalId} />;
+      case "medical_gas": return <MedicalGasTab     hospitalId={hospitalId} />;
+      case "electrical":  return <ElectricalSafetyTab hospitalId={hospitalId} />;
       default: return null;
     }
   };

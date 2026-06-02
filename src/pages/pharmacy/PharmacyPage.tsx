@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasTabAccess, hasActionAccess } from "@/lib/tabPermissions";
 import { Pill, ShoppingCart, Package, ClipboardList, BarChart3, Bell, Plus, RotateCcw, CalendarX2, PackageSearch, ArrowRightLeft, Store } from "lucide-react";
 import NABHBadge from "@/components/nabh/NABHBadge";
 import { cn } from "@/lib/utils";
@@ -29,6 +31,7 @@ type PharmacyTab = "dispense" | "stock" | "ndps" | "reports" | "returns" | "expi
 
 const PharmacyPage: React.FC = () => {
   const { toast } = useToast();
+  const { permissions, role } = useHospitalContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const [hospitalId, setHospitalId] = useState<string | null>(null);
   const [mode, setMode] = useState<PharmacyMode>(
@@ -176,14 +179,16 @@ const PharmacyPage: React.FC = () => {
               ⚠️ {alertCount} Stock Alert{alertCount !== 1 ? "s" : ""}
             </button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-xs"
-            onClick={() => setShowReceiveStock(true)}
-          >
-            <Plus size={14} className="mr-1" /> Receive Stock
-          </Button>
+          {hasActionAccess("pharmacy", "receive_stock", permissions, role) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={() => setShowReceiveStock(true)}
+            >
+              <Plus size={14} className="mr-1" /> Receive Stock
+            </Button>
+          )}
           <span className="text-xs text-muted-foreground">{today}</span>
           <NABHBadge standardCodes={["MOM.1", "MOM.2", "MOM.3", "MOM.4"]} />
         </div>
@@ -191,7 +196,7 @@ const PharmacyPage: React.FC = () => {
 
       {/* SUB-TAB STRIP */}
       <div className="h-[44px] flex-shrink-0 bg-background border-b border-border px-5 flex items-center gap-1">
-        {tabs.map((t) => {
+        {tabs.filter((t) => hasTabAccess("pharmacy", t.key, permissions, role)).map((t) => {
           const Icon = t.icon;
           return (
             <button

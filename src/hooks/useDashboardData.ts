@@ -73,14 +73,14 @@ export function useDashboardData() {
         supabase.from("opd_visits").select("*", { count: "exact", head: true }).eq("hospital_id", hid).eq("visit_date", today).eq("status", "waiting"),
         // 6: OPD seen/completed (count only)
         supabase.from("opd_visits").select("*", { count: "exact", head: true }).eq("hospital_id", hid).eq("visit_date", today).eq("status", "completed"),
-        // 7: Revenue MTD — server-side SUM (single row, no data transfer)
-        supabase.from("bills").select("paid_amount.sum()").eq("hospital_id", hid)
-          .gte("bill_date", monthStart).neq("bill_type", "pharmacy"),
-        // 8: Revenue last month — server-side SUM
-        supabase.from("bills").select("paid_amount.sum()").eq("hospital_id", hid)
-          .gte("bill_date", lastMonthStart)
-          .lte("bill_date", lastMonthEndStr)
+        // 7: Revenue MTD — paid/partial bills only (client-side sum for reliability)
+        supabase.from("bills").select("paid_amount").eq("hospital_id", hid)
+          .gte("bill_date", monthStart).in("payment_status", ["paid", "partial"])
           .neq("bill_type", "pharmacy"),
+        // 8: Revenue last month
+        supabase.from("bills").select("paid_amount").eq("hospital_id", hid)
+          .gte("bill_date", lastMonthStart).lte("bill_date", lastMonthEndStr)
+          .in("payment_status", ["paid", "partial"]).neq("bill_type", "pharmacy"),
         // 9: Total doctors
         supabase.from("users").select("*", { count: "exact", head: true }).eq("hospital_id", hid)
           .eq("role", "doctor").eq("is_active", true),
@@ -90,12 +90,12 @@ export function useDashboardData() {
         // 11: Critical alerts
         supabase.from("clinical_alerts").select("id", { count: "exact", head: true }).eq("hospital_id", hid)
           .eq("is_acknowledged", false),
-        // 12: Pharmacy retail MTD — server-side SUM
-        (supabase as any).from("pharmacy_dispensing").select("net_amount.sum()").eq("hospital_id", hid)
+        // 12: Pharmacy retail MTD
+        (supabase as any).from("pharmacy_dispensing").select("net_amount").eq("hospital_id", hid)
           .eq("dispensing_type", "retail").eq("status", "dispensed")
           .gte("created_at", monthStart),
-        // 13: Pharmacy retail last month — server-side SUM
-        (supabase as any).from("pharmacy_dispensing").select("net_amount.sum()").eq("hospital_id", hid)
+        // 13: Pharmacy retail last month
+        (supabase as any).from("pharmacy_dispensing").select("net_amount").eq("hospital_id", hid)
           .eq("dispensing_type", "retail").eq("status", "dispensed")
           .gte("created_at", lastMonthStart)
           .lte("created_at", lastMonthEndStr + "T23:59:59"),
@@ -108,15 +108,9 @@ export function useDashboardData() {
         return fallback;
       };
 
-      // Server-side SUM returns data[0]?.sum — fall back to row-sum if the
-      // aggregate syntax isn't supported by the PostgREST version.
+      // Sum a numeric column across all returned rows.
       const extractSum = (res: any, field: string): number => {
         if (!res?.data) return 0;
-        const first = res.data[0];
-        if (!first) return 0;
-        // PostgREST aggregate result shape: { sum: "1234.56" }
-        if ("sum" in first) return Number(first.sum) || 0;
-        // Fallback: raw rows with the column (legacy path)
         return res.data.reduce((s: number, row: any) => s + Number(row[field] ?? 0), 0);
       };
 

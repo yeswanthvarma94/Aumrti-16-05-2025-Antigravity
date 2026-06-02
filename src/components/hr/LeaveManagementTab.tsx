@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useConfigValues } from "@/hooks/useConfigValues";
 
 interface LeaveRequest {
   id: string;
@@ -32,10 +33,10 @@ interface LeaveBalanceData {
   comp_off_balance: number;
 }
 
-const leaveTypes = ["casual", "sick", "earned", "maternity", "paternity", "compensatory", "unpaid", "study", "emergency"];
 
 const LeaveManagementTab: React.FC = () => {
   const { toast } = useToast();
+  const leaveTypeOptions = useConfigValues("leave_types");
   const [filter, setFilter] = useState("pending");
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
@@ -320,7 +321,7 @@ const LeaveManagementTab: React.FC = () => {
             <Select value={applyForm.leaveType} onValueChange={(v) => setApplyForm((p) => ({ ...p, leaveType: v }))}>
               <SelectTrigger className="text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {leaveTypes.map((t) => <SelectItem key={t} value={t} className="text-xs capitalize">{t}</SelectItem>)}
+                {leaveTypeOptions.map((t) => <SelectItem key={t.value} value={t.value} className="text-xs">{t.label}</SelectItem>)}
               </SelectContent>
             </Select>
             {applyForm.leaveType === "maternity" && applyForm.userId && (() => {

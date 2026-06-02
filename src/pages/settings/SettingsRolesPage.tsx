@@ -14,6 +14,9 @@ import {
   X,
   ShieldCheck,
   Users,
+  ChevronDown,
+  ChevronRight,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +24,8 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { logConfigChange } from "@/lib/ims";
+import { MODULE_TABS, MODULE_ACTIONS, parseModuleTabs, parseModuleActions } from "@/lib/tabPermissions";
+import { Zap } from "lucide-react";
 
 /* ───── Module definitions ───── */
 const MODULES = [
@@ -131,13 +136,27 @@ const parsePermissions = (perms: Record<string, unknown>): Record<ModuleKey, Rec
   return result;
 };
 
-const serializePermissions = (matrix: Record<ModuleKey, Record<Action, boolean>>): Record<string, unknown> => {
+const serializePermissions = (
+  matrix: Record<ModuleKey, Record<Action, boolean>>,
+  tabMatrix: Record<string, Record<string, boolean>>,
+  actionMatrix: Record<string, Record<string, boolean>>
+): Record<string, unknown> => {
   const result: Record<string, unknown> = {};
   for (const mod of MODULES) {
     const m = matrix[mod.key];
     const hasAny = Object.values(m).some(Boolean);
     if (hasAny) {
-      result[mod.key] = m;
+      const entry: Record<string, unknown> = { ...m };
+
+      const tabs = tabMatrix[mod.key];
+      const tabDefs = MODULE_TABS[mod.key] ?? [];
+      if (tabDefs.some((t) => tabs && tabs[t.key] === false)) entry.tabs = tabs;
+
+      const actions = actionMatrix[mod.key];
+      const actionDefs = MODULE_ACTIONS[mod.key] ?? [];
+      if (actionDefs.some((a) => actions && actions[a.key] === false)) entry.actions = actions;
+
+      result[mod.key] = entry;
     }
   }
   return result;
@@ -152,6 +171,9 @@ const SettingsRolesPage: React.FC = () => {
 
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [matrix, setMatrix] = useState<Record<ModuleKey, Record<Action, boolean>> | null>(null);
+  const [tabMatrix, setTabMatrix] = useState<Record<string, Record<string, boolean>>>({});
+  const [actionMatrix, setActionMatrix] = useState<Record<string, Record<string, boolean>>>({});
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
   const [editLabel, setEditLabel] = useState("");
   const [previewRole, setPreviewRole] = useState<RolePermission | null>(null);
   const [createPickerOpen, setCreatePickerOpen] = useState(false);
@@ -203,10 +225,22 @@ const SettingsRolesPage: React.FC = () => {
 
   useEffect(() => {
     if (selectedRole) {
-      setMatrix(parsePermissions(selectedRole.permissions as Record<string, unknown>));
+      const perms = selectedRole.permissions as Record<string, any>;
+      setMatrix(parsePermissions(perms));
+      const tabs: Record<string, Record<string, boolean>> = {};
+      const actions: Record<string, Record<string, boolean>> = {};
+      for (const mod of MODULES) {
+        if (MODULE_TABS[mod.key]) tabs[mod.key] = parseModuleTabs(mod.key, perms);
+        if (MODULE_ACTIONS[mod.key]) actions[mod.key] = parseModuleActions(mod.key, perms);
+      }
+      setTabMatrix(tabs);
+      setActionMatrix(actions);
       setEditLabel(selectedRole.role_label);
+      setExpandedModules(new Set());
     } else {
       setMatrix(null);
+      setTabMatrix({});
+      setActionMatrix({});
       setEditLabel("");
     }
   }, [selectedRoleId, selectedRole]);
@@ -215,7 +249,7 @@ const SettingsRolesPage: React.FC = () => {
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!selectedRole || !matrix) return;
-      const perms = serializePermissions(matrix);
+      const perms = serializePermissions(matrix, tabMatrix, actionMatrix);
       const oldPerms = selectedRole.permissions;
       const { error } = await supabase
         .from("role_permissions")
@@ -294,6 +328,31 @@ const SettingsRolesPage: React.FC = () => {
     [matrix, selectedRole]
   );
 
+  /* ── Toggle tab permission ── */
+  const toggleTab = useCallback((mod: string, tabKey: string) => {
+    setTabMatrix((prev) => ({
+      ...prev,
+      [mod]: { ...(prev[mod] ?? {}), [tabKey]: !(prev[mod]?.[tabKey] ?? true) },
+    }));
+  }, []);
+
+  /* ── Toggle action permission ── */
+  const toggleAction = useCallback((mod: string, actionKey: string) => {
+    setActionMatrix((prev) => ({
+      ...prev,
+      [mod]: { ...(prev[mod] ?? {}), [actionKey]: !(prev[mod]?.[actionKey] ?? true) },
+    }));
+  }, []);
+
+  /* ── Toggle module expand (show/hide tab rows) ── */
+  const toggleExpand = useCallback((mod: string) => {
+    setExpandedModules((prev) => {
+      const next = new Set(prev);
+      next.has(mod) ? next.delete(mod) : next.add(mod);
+      return next;
+    });
+  }, []);
+
   /* ── Quick presets ── */
   const applyModulePreset = (mod: ModuleKey, preset: "full" | "view" | "none") => {
     if (!matrix) return;
@@ -304,6 +363,14 @@ const SettingsRolesPage: React.FC = () => {
         ? { view: true, create: false, edit: false, delete: false, approve: false, export: true }
         : { view: false, create: false, edit: false, delete: false, approve: false, export: false };
     setMatrix((prev) => (prev ? { ...prev, [mod]: vals } : prev));
+    // Reset all tabs to enabled when applying a module preset
+    const defs = MODULE_TABS[mod] ?? [];
+    if (defs.length > 0) {
+      setTabMatrix((prev) => ({
+        ...prev,
+        [mod]: Object.fromEntries(defs.map((t) => [t.key, true])),
+      }));
+    }
   };
 
   const applyGlobalPreset = (preset: "full" | "view" | "clinical" | "finance") => {
@@ -609,51 +676,145 @@ const SettingsRolesPage: React.FC = () => {
               {/* Module rows */}
               {MODULES.map((mod) => {
                 const perms = matrix[mod.key];
+                const modTabs = MODULE_TABS[mod.key] ?? [];
+                const modActions = MODULE_ACTIONS[mod.key] ?? [];
+                const isExpanded = expandedModules.has(mod.key);
+                const tabPerms = tabMatrix[mod.key] ?? {};
+                const actionPerms = actionMatrix[mod.key] ?? {};
+                const restrictedTabCount = modTabs.filter((t) => tabPerms[t.key] === false).length;
+                const restrictedActionCount = modActions.filter((a) => actionPerms[a.key] === false).length;
+                const hasCustomize = modTabs.length > 0 || modActions.length > 0;
                 return (
-                  <div
-                    key={mod.key}
-                    className="group grid grid-cols-[1fr_repeat(6,80px)] border-b border-border last:border-b-0 hover:bg-muted/30 transition-colors"
-                  >
-                    <div className="px-4 py-2.5 flex items-center gap-2">
-                      <span className="text-sm">{mod.emoji}</span>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-[13px] text-foreground">{mod.label}</span>
-                        <div className="hidden group-hover:flex gap-1 mt-0.5">
-                          <>
-                            <button
-                              className="text-[10px] text-primary hover:underline"
-                              onClick={() => applyModulePreset(mod.key, "full")}
-                            >
-                              Full
-                            </button>
+                  <React.Fragment key={mod.key}>
+                    <div className="group grid grid-cols-[1fr_repeat(6,80px)] border-b border-border hover:bg-muted/30 transition-colors">
+                      <div className="px-4 py-2.5 flex items-center gap-2">
+                        <span className="text-sm">{mod.emoji}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[13px] text-foreground">{mod.label}</span>
+                            {restrictedTabCount > 0 && (
+                              <Badge variant="outline" className="text-[9px] h-4 px-1.5 text-amber-600 border-amber-300">
+                                {modTabs.length - restrictedTabCount}/{modTabs.length} tabs
+                              </Badge>
+                            )}
+                            {restrictedActionCount > 0 && (
+                              <Badge variant="outline" className="text-[9px] h-4 px-1.5 text-rose-600 border-rose-300">
+                                {modActions.length - restrictedActionCount}/{modActions.length} actions
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="hidden group-hover:flex gap-1 mt-0.5 items-center">
+                            <button className="text-[10px] text-primary hover:underline" onClick={() => applyModulePreset(mod.key, "full")}>Full</button>
                             <span className="text-[10px] text-muted-foreground">·</span>
-                            <button
-                              className="text-[10px] text-primary hover:underline"
-                              onClick={() => applyModulePreset(mod.key, "view")}
-                            >
-                              View Only
-                            </button>
+                            <button className="text-[10px] text-primary hover:underline" onClick={() => applyModulePreset(mod.key, "view")}>View Only</button>
                             <span className="text-[10px] text-muted-foreground">·</span>
-                            <button
-                              className="text-[10px] text-destructive hover:underline"
-                              onClick={() => applyModulePreset(mod.key, "none")}
-                            >
-                              None
-                            </button>
-                          </>
+                            <button className="text-[10px] text-destructive hover:underline" onClick={() => applyModulePreset(mod.key, "none")}>None</button>
+                          </div>
                         </div>
+                        {hasCustomize && (
+                          <button
+                            onClick={() => toggleExpand(mod.key)}
+                            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded border border-transparent hover:border-border whitespace-nowrap"
+                            title="Configure tabs & action controls"
+                          >
+                            <Layers size={10} />
+                            Customise
+                            {isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                          </button>
+                        )}
                       </div>
+                      {ACTIONS.map((action) => (
+                        <div key={action} className="flex items-center justify-center py-2.5">
+                          <Switch
+                            checked={perms[action]}
+                            onCheckedChange={() => togglePerm(mod.key, action)}
+                            className="scale-75"
+                          />
+                        </div>
+                      ))}
                     </div>
-                    {ACTIONS.map((action) => (
-                      <div key={action} className="flex items-center justify-center py-2.5">
-                        <Switch
-                          checked={perms[action]}
-                          onCheckedChange={() => togglePerm(mod.key, action)}
-                          className="scale-75"
-                        />
+
+                    {/* Expanded customisation panel — Tabs + Actions */}
+                    {isExpanded && hasCustomize && (
+                      <div className="border-b border-border bg-muted/20">
+
+                        {/* Tab Access section */}
+                        {modTabs.length > 0 && (
+                          <>
+                            <div className="px-6 py-2 flex items-center gap-2 border-b border-border/40">
+                              <Layers size={11} className="text-blue-500" />
+                              <span className="text-[11px] font-semibold text-blue-600 uppercase tracking-wide">Tab Visibility</span>
+                              <span className="text-[10px] text-muted-foreground ml-1">— which tabs this role can see</span>
+                              <button
+                                className="ml-auto text-[10px] text-primary hover:underline"
+                                onClick={() => {
+                                  const allOn = modTabs.every((t) => tabPerms[t.key] !== false);
+                                  setTabMatrix((prev) => ({
+                                    ...prev,
+                                    [mod.key]: Object.fromEntries(modTabs.map((t) => [t.key, !allOn])),
+                                  }));
+                                }}
+                              >
+                                {modTabs.every((t) => tabPerms[t.key] !== false) ? "Disable All" : "Enable All"}
+                              </button>
+                            </div>
+                            <div className="px-6 py-3 flex flex-wrap gap-x-6 gap-y-2 border-b border-border/30">
+                              {modTabs.map((tab) => {
+                                const enabled = tabPerms[tab.key] !== false;
+                                return (
+                                  <label key={tab.key} className="flex items-center gap-2 cursor-pointer select-none">
+                                    <Switch checked={enabled} onCheckedChange={() => toggleTab(mod.key, tab.key)} className="scale-75" />
+                                    <span className={cn("text-[12px]", enabled ? "text-foreground" : "text-muted-foreground line-through")}>
+                                      {tab.label}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+
+                        {/* Action Controls section */}
+                        {modActions.length > 0 && (
+                          <>
+                            <div className="px-6 py-2 flex items-center gap-2 border-b border-border/40">
+                              <Zap size={11} className="text-rose-500" />
+                              <span className="text-[11px] font-semibold text-rose-600 uppercase tracking-wide">Action Controls</span>
+                              <span className="text-[10px] text-muted-foreground ml-1">— which buttons/actions this role can perform</span>
+                              <button
+                                className="ml-auto text-[10px] text-primary hover:underline"
+                                onClick={() => {
+                                  const allOn = modActions.every((a) => actionPerms[a.key] !== false);
+                                  setActionMatrix((prev) => ({
+                                    ...prev,
+                                    [mod.key]: Object.fromEntries(modActions.map((a) => [a.key, !allOn])),
+                                  }));
+                                }}
+                              >
+                                {modActions.every((a) => actionPerms[a.key] !== false) ? "Disable All" : "Enable All"}
+                              </button>
+                            </div>
+                            <div className="px-6 py-3 grid grid-cols-2 gap-x-8 gap-y-2.5">
+                              {modActions.map((action) => {
+                                const enabled = actionPerms[action.key] !== false;
+                                return (
+                                  <label key={action.key} className="flex items-start gap-2 cursor-pointer select-none">
+                                    <Switch checked={enabled} onCheckedChange={() => toggleAction(mod.key, action.key)} className="scale-75 mt-0.5 shrink-0" />
+                                    <div>
+                                      <span className={cn("text-[12px] font-medium block", enabled ? "text-foreground" : "text-muted-foreground line-through")}>
+                                        {action.label}
+                                      </span>
+                                      <span className="text-[10px] text-muted-foreground">{action.description}</span>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
                       </div>
-                    ))}
-                  </div>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </div>

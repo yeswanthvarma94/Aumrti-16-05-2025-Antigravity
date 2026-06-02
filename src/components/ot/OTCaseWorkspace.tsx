@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Scissors, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasTabAccess } from "@/lib/tabPermissions";
 import type { OTSchedule } from "@/pages/ot/OTPage";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -23,8 +25,19 @@ const PACU_TAB = "PACU" as const;
 const BILLING_TAB = "Billing" as const;
 type TabName = (typeof BASE_TABS)[number] | typeof PACU_TAB | typeof BILLING_TAB;
 
+// Maps tab label → permission key (matches MODULE_TABS in tabPermissions.ts)
+const OT_TAB_KEYS: Record<string, string> = {
+  "WHO Checklist": "who_checklist",
+  "Case Details": "case_details",
+  "OT Team": "ot_team",
+  "Implants & Consumables": "implants",
+  "PACU": "pacu",
+  "Billing": "billing",
+};
+
 const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) => {
   const { toast } = useToast();
+  const { permissions, role } = useHospitalContext();
   const [activeTab, setActiveTab] = useState<TabName>("WHO Checklist");
   const [endCaseOpen, setEndCaseOpen] = useState(false);
   const [showPacGate, setShowPacGate] = useState(false);
@@ -189,7 +202,9 @@ const OTCaseWorkspace: React.FC<Props> = ({ schedule, hospitalId, onRefresh }) =
 
       {/* Tab strip */}
       <div className="flex border-b border-border bg-card flex-shrink-0">
-        {([...BASE_TABS, ...((schedule.status === "in_progress" || schedule.status === "completed") ? [PACU_TAB] : []), BILLING_TAB] as TabName[]).map((tab) => (
+        {([...BASE_TABS, ...((schedule.status === "in_progress" || schedule.status === "completed") ? [PACU_TAB] : []), BILLING_TAB] as TabName[])
+          .filter((tab) => hasTabAccess("ot", OT_TAB_KEYS[tab] ?? tab, permissions, role))
+          .map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}

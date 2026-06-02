@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { autoChargeService, MODULE_ED } from "@/lib/serviceBilling";
 import { useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -249,6 +250,20 @@ const EmergencyWorkspace: React.FC<Props> = ({ visit, hospitalId, userId, onRefr
           status: "open",
         });
       }
+    }
+
+    // Auto-bill ED charges on discharge (not on admission — IPD bill will cover admitted patients)
+    if (disp === "discharged" && hospitalId && visit.patient_id) {
+      autoChargeService({
+        hospitalId,
+        patientId:     visit.patient_id,
+        encounterId:   visit.id,          // use ed_visit id as encounter reference
+        serviceName:   `Emergency Department — ${visit.chief_complaint || "ED Visit"} (Triage: ${visit.triage_category?.toUpperCase() || "N/A"})`,
+        serviceModule: MODULE_ED,
+        sourceTable:   "ed_visits",
+        sourceId:      visit.id,
+        serviceDate:   new Date().toISOString().split("T")[0],
+      }).catch(() => {});
     }
 
     toast({ title: `Patient ${disp}` });

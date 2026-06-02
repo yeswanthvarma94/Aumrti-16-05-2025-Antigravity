@@ -55,8 +55,8 @@ export default defineConfig(({ mode }) => ({
             },
           },
         ],
-        navigateFallback: "/offline.html",
-        navigateFallbackDenylist: [/^\/fhir\//, /^\/api\//],
+        navigateFallback: "/index.html",
+        navigateFallbackDenylist: [/^\/fhir\//, /^\/api\//, /^\/offline\.html$/],
         cleanupOutdatedCaches: true,
       },
     }),
@@ -68,12 +68,39 @@ export default defineConfig(({ mode }) => ({
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
   },
   build: {
+    // Raise the warning threshold so legitimate vendor chunks don't spam the build log.
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks: {
-          recharts: ["recharts"],
-          xlsx: ["xlsx"],
-          dnd: ["@dnd-kit/core", "@dnd-kit/sortable"],
+          // Heavy charting / data libraries
+          recharts:    ["recharts"],
+          xlsx:        ["xlsx"],
+          dnd:         ["@dnd-kit/core", "@dnd-kit/sortable"],
+          // Date utilities — large and used on almost every page
+          "date-fns":  ["date-fns"],
+          // Icon library — very large, isolating prevents it from bloating the main chunk
+          lucide:      ["lucide-react"],
+          // Radix UI primitives — heavy, stable, rarely changes
+          radix: [
+            "@radix-ui/react-dialog",
+            "@radix-ui/react-dropdown-menu",
+            "@radix-ui/react-popover",
+            "@radix-ui/react-select",
+            "@radix-ui/react-tabs",
+            "@radix-ui/react-tooltip",
+            "@radix-ui/react-accordion",
+            "@radix-ui/react-checkbox",
+            "@radix-ui/react-label",
+            "@radix-ui/react-separator",
+            "@radix-ui/react-sheet",
+            "@radix-ui/react-switch",
+            "@radix-ui/react-toast",
+          ],
+          // Supabase client — large, never changes between deploys
+          supabase:    ["@supabase/supabase-js"],
+          // React router
+          router:      ["react-router-dom"],
         },
       },
     },

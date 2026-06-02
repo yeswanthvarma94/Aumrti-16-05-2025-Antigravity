@@ -53,7 +53,7 @@ export default function AdvanceManagement({ admissionId, patientId, hospitalId, 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [balRes, txRes] = await Promise.all([
+      const [balRes, txRes, receiptsRes] = await Promise.all([
         (supabase as any)
           .from("ipd_advance_balances")
           .select("balance, total_deposited, total_debited")
@@ -64,15 +64,17 @@ export default function AdvanceManagement({ admissionId, patientId, hospitalId, 
           .select("id, transaction_type, amount, payment_mode, reference_no, description, created_at, users(full_name)")
           .eq("admission_id", admissionId)
           .order("created_at", { ascending: false }),
+        // Also fetch advance_receipts for this patient — covers deposits recorded
+        // before the dual-write fix (those only exist in advance_receipts, not ipd_advances)
+        (supabase as any)
+          .from("advance_receipts")
+          .select("id, amount, payment_mode, receipt_number, notes, created_at")
+          .eq("hospital_id", hospitalId)
+          .eq("patient_id", patientId)
+          .order("created_at", { ascending: false }),
       ]);
 
-      setBalance({
-        balance: Number(balRes.data?.balance) || 0,
-        total_deposited: Number(balRes.data?.total_deposited) || 0,
-        total_debited: Number(balRes.data?.total_debited) || 0,
-      });
-
-      setTransactions((txRes.data || []).map((t: any) => ({
+      const ipdTxns: AdvanceTx[] = (txRes.data || []).map((t: any) => ({
         id: t.id,
         transaction_type: t.transaction_type,
         amount: Number(t.amount),
@@ -81,11 +83,45 @@ export default function AdvanceManagement({ admissionId, patientId, hospitalId, 
         description: t.description,
         created_at: t.created_at,
         collected_by_name: t.users?.full_name || null,
-      })));
+      }));
+
+      // Receipts whose receipt_number is already stored as reference_no in ipd_advances
+      // were mirrored by the dual-write path — skip them to avoid double-counting
+      const mirroredRefs = new Set(ipdTxns.map((t) => t.reference_no).filter(Boolean));
+      const unmirroredReceipts = (receiptsRes.data || []).filter(
+        (r: any) => !mirroredRefs.has(r.receipt_number)
+      );
+      const receiptTxns: AdvanceTx[] = unmirroredReceipts.map((r: any) => ({
+        id: r.id,
+        transaction_type: "deposit",
+        amount: Number(r.amount),
+        payment_mode: r.payment_mode,
+        reference_no: r.receipt_number,
+        description: r.notes || "Advance deposit",
+        created_at: r.created_at,
+        collected_by_name: null,
+      }));
+
+      const unmirroredTotal = unmirroredReceipts.reduce(
+        (s: number, r: any) => s + Number(r.amount || 0), 0
+      );
+      const ipdDeposited = Number(balRes.data?.total_deposited) || 0;
+      const ipdDebited  = Number(balRes.data?.total_debited)    || 0;
+
+      setBalance({
+        total_deposited: ipdDeposited + unmirroredTotal,
+        total_debited:   ipdDebited,
+        balance:         ipdDeposited + unmirroredTotal - ipdDebited,
+      });
+
+      const allTxns = [...ipdTxns, ...receiptTxns].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      setTransactions(allTxns);
     } finally {
       setLoading(false);
     }
-  }, [admissionId]);
+  }, [admissionId, patientId, hospitalId]);
 
   useEffect(() => { load(); }, [load]);
 

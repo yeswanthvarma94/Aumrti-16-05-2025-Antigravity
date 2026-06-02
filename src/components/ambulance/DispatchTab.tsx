@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { useToast } from "@/hooks/use-toast";
+import { autoChargeService, MODULE_AMBULANCE } from "@/lib/serviceBilling";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -96,6 +97,27 @@ const DispatchTab: React.FC = () => {
     const tsField = STATUS_TIMESTAMPS[newStatus];
     if (tsField) updates[tsField] = new Date().toISOString();
     await (supabase as any).from("ambulance_dispatches").update(updates).eq("id", dispatchId);
+
+    // Wire billing when trip is completed
+    if (newStatus === "completed" && hospitalId) {
+      const { data: dispatch } = await (supabase as any)
+        .from("ambulance_dispatches")
+        .select("patient_id, pickup_location, destination, billing_status")
+        .eq("id", dispatchId).maybeSingle();
+
+      if (dispatch && dispatch.billing_status !== "billed" && dispatch.patient_id) {
+        autoChargeService({
+          hospitalId,
+          patientId:     dispatch.patient_id,
+          serviceName:   `Ambulance Trip — ${dispatch.pickup_location || "Pickup"} → ${dispatch.destination || "Hospital"}`,
+          serviceModule: MODULE_AMBULANCE,
+          sourceTable:   "ambulance_dispatches",
+          sourceId:      dispatchId,
+          serviceDate:   new Date().toISOString().split("T")[0],
+        }).catch(() => {});
+      }
+    }
+
     load();
   };
 

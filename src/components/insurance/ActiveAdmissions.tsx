@@ -43,6 +43,11 @@ interface AdmissionRow {
   // Utilization
   bill_total: number | null;
   supplementary_pa_id: string | null;
+  // TPA contract limits
+  room_rent_ceiling:   number | null;
+  co_payment_type:     string | null;
+  co_payment_value:    number | null;
+  copayment_collected: boolean;
 }
 
 export interface AdmissionContext {
@@ -292,6 +297,17 @@ const ActiveAdmissions: React.FC<Props> = ({ onNavigate, onNeedsSupplementary })
     const dMap  = Object.fromEntries((dRes.data  || []).map(d => [d.id, d]));
     const paMap = Object.fromEntries((paRes.data || []).map(pa => [pa.admission_id, pa]));
 
+    // Load TPA config for room rent / co-payment display
+    const tpaNames = [...new Set((paRes.data || []).map((pa: any) => pa?.tpa_name).filter(Boolean))];
+    let tpaConfigMap: Record<string, any> = {};
+    if (tpaNames.length > 0) {
+      const { data: tpaConfigs } = await (supabase as any)
+        .from("tpa_config")
+        .select("tpa_name, room_rent_ceiling, co_payment_type, co_payment_value")
+        .in("tpa_name", tpaNames);
+      tpaConfigMap = Object.fromEntries((tpaConfigs || []).map((t: any) => [t.tpa_name, t]));
+    }
+
     const activeAdmissions = admissions.filter(a => (bMap[a.bed_id] as any)?.status === "occupied");
 
     // ── Bill totals for approved pre-auths ─────────────────────────
@@ -354,6 +370,10 @@ const ActiveAdmissions: React.FC<Props> = ({ onNavigate, onNeedsSupplementary })
         tpa_name:             pa?.tpa_name || a.insurance_type,
         bill_total:           billTotalMap[a.id] ?? null,
         supplementary_pa_id:  pa?.id ? (suppMap[pa.id] ?? null) : null,
+        room_rent_ceiling:    Number(tpaConfigMap[pa?.tpa_name]?.room_rent_ceiling ?? 0) || null,
+        co_payment_type:      tpaConfigMap[pa?.tpa_name]?.co_payment_type ?? null,
+        co_payment_value:     Number(tpaConfigMap[pa?.tpa_name]?.co_payment_value ?? 0) || null,
+        copayment_collected:  (pa as any)?.copayment_collected ?? false,
       };
     });
 
@@ -467,6 +487,29 @@ const ActiveAdmissions: React.FC<Props> = ({ onNavigate, onNeedsSupplementary })
     });
   };
 
+  // ── Co-payment calculation ────────────────────────────────────────
+
+  const calcCopayment = (row: AdmissionRow, days: number): number | null => {
+    if (!row.co_payment_type || row.co_payment_type === "none" || !row.co_payment_value) return null;
+    if (row.co_payment_type === "percentage" && row.bill_total)
+      return Math.round(row.bill_total * (row.co_payment_value / 100));
+    if (row.co_payment_type === "fixed")
+      return row.co_payment_value;
+    if (row.co_payment_type === "per_day")
+      return row.co_payment_value * days;
+    return null;
+  };
+
+  const markCopaymentCollected = useCallback(async (row: AdmissionRow) => {
+    if (!row.pre_auth_id) return;
+    await (supabase as any).from("insurance_pre_auth").update({
+      copayment_collected: true,
+      copayment_collected_at: new Date().toISOString(),
+    }).eq("id", row.pre_auth_id);
+    toast({ title: "Co-payment marked as collected ✓" });
+    loadData();
+  }, [loadData, toast]);
+
   // ── Pre-auth badge ─────────────────────────────────────────────────
 
   const preAuthBadge = (status: string | null) => {
@@ -500,6 +543,7 @@ const ActiveAdmissions: React.FC<Props> = ({ onNavigate, onNeedsSupplementary })
               <TableHead className="text-xs">Insurance</TableHead>
               <TableHead className="text-xs">Pre-Auth</TableHead>
               <TableHead className="text-xs">Utilization</TableHead>
+              <TableHead className="text-xs">Co-Pay / Rent</TableHead>
               <TableHead className="text-xs">Intimation</TableHead>
               <TableHead className="text-xs">Auth Validity</TableHead>
               <TableHead className="text-xs">SLA</TableHead>
@@ -510,7 +554,7 @@ const ActiveAdmissions: React.FC<Props> = ({ onNavigate, onNeedsSupplementary })
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center text-muted-foreground text-sm py-8">
+                <TableCell colSpan={12} className="text-center text-muted-foreground text-sm py-8">
                   No active insurance admissions
                 </TableCell>
               </TableRow>
@@ -564,6 +608,50 @@ const ActiveAdmissions: React.FC<Props> = ({ onNavigate, onNeedsSupplementary })
                     ) : (
                       <span className="text-[10px] text-muted-foreground">—</span>
                     )}
+                  </TableCell>
+
+                  {/* Co-Payment / Room Rent */}
+                  <TableCell>
+                    <div className="space-y-1 min-w-[110px]">
+                      {(() => {
+                        const copayDue = calcCopayment(r, days);
+                        const dailyBill = (r.bill_total && days > 0) ? r.bill_total / days : null;
+                        const rentBreached = r.room_rent_ceiling && dailyBill && dailyBill > r.room_rent_ceiling;
+                        return (
+                          <>
+                            {copayDue !== null && (
+                              r.copayment_collected ? (
+                                <span className="text-[10px] text-emerald-700 flex items-center gap-1">
+                                  ✓ Co-pay collected
+                                </span>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="text-[10px] text-amber-700 font-medium">
+                                    Co-pay due: {formatINR(copayDue)}
+                                  </span>
+                                  {r.pre_auth_id && (
+                                    <button
+                                      onClick={() => markCopaymentCollected(r)}
+                                      className="block text-[10px] text-blue-600 underline underline-offset-2 hover:text-blue-800"
+                                    >
+                                      Mark Collected
+                                    </button>
+                                  )}
+                                </div>
+                              )
+                            )}
+                            {rentBreached && (
+                              <Badge variant="outline" className="text-[9px] bg-red-50 text-red-700 border-red-200 px-1 py-0">
+                                ⚠ Rent {formatINR(Math.round(dailyBill!))}/d &gt; {formatINR(r.room_rent_ceiling!)}/d limit
+                              </Badge>
+                            )}
+                            {!copayDue && !rentBreached && (
+                              <span className="text-[10px] text-muted-foreground">—</span>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
                   </TableCell>
 
                   {/* Intimation */}

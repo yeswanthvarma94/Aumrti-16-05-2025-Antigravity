@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { autoChargeService, MODULE_MENTAL_HEALTH } from "@/lib/serviceBilling";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -99,9 +100,31 @@ const MHTherapyTab: React.FC<Props> = ({ patientId, hospitalId }) => {
     if (error) { toast.error(error.message); setSaving(false); return; }
 
     // Increment completed sessions
+    const { data: newSession } = await (supabase as any)
+      .from("therapy_sessions")
+      .select("id")
+      .eq("plan_id", selectedPlan.id)
+      .eq("patient_id", patientId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
     await (supabase as any).from("therapy_plans").update({
       completed_sessions: (selectedPlan.completed_sessions || 0) + 1,
     }).eq("id", selectedPlan.id);
+
+    // Auto-bill the therapy session
+    if (newSession?.id) {
+      autoChargeService({
+        hospitalId,
+        patientId,
+        serviceName:   `Mental Health Therapy Session #${(selectedPlan.completed_sessions || 0) + 1}`,
+        serviceModule: MODULE_MENTAL_HEALTH,
+        sourceTable:   "therapy_sessions",
+        sourceId:      newSession.id,
+        serviceDate:   new Date().toISOString().split("T")[0],
+      }).catch(() => {});
+    }
 
     toast.success("Session recorded");
     setShowNewSession(false);

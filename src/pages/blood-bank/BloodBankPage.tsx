@@ -3,7 +3,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
-import { Package, Droplets, Microscope, User, ClipboardList, BarChart3, UserPlus, FileText } from "lucide-react";
+import { Package, Droplets, Microscope, User, ClipboardList, BarChart3, UserPlus, FileText, FlaskConical } from "lucide-react";
 import { formatBloodGroup } from "@/lib/bloodCompatibility";
 import InventoryTab from "@/components/blood-bank/InventoryTab";
 import RequestsTab from "@/components/blood-bank/RequestsTab";
@@ -11,6 +11,7 @@ import CrossMatchTab from "@/components/blood-bank/CrossMatchTab";
 import DonorsTab from "@/components/blood-bank/DonorsTab";
 import IssueLogTab from "@/components/blood-bank/IssueLogTab";
 import ReportsTab from "@/components/blood-bank/ReportsTab";
+import TTITestingTab from "@/components/blood-bank/TTITestingTab";
 
 const BLOOD_GROUPS = ['A', 'B', 'AB', 'O'] as const;
 const RH_FACTORS = ['positive', 'negative'] as const;
@@ -86,6 +87,7 @@ const BloodBankPage: React.FC = () => {
           <TabsTrigger value="crossmatch" className="gap-1.5"><Microscope className="w-4 h-4" /> Cross-Match</TabsTrigger>
           <TabsTrigger value="donors" className="gap-1.5"><User className="w-4 h-4" /> Donors</TabsTrigger>
           <TabsTrigger value="issuelog" className="gap-1.5"><ClipboardList className="w-4 h-4" /> Issue Log</TabsTrigger>
+          <TabsTrigger value="tti" className="gap-1.5"><FlaskConical className="w-4 h-4" /> TTI Testing</TabsTrigger>
           <TabsTrigger value="reports" className="gap-1.5"><BarChart3 className="w-4 h-4" /> Reports</TabsTrigger>
         </TabsList>
 
@@ -103,6 +105,9 @@ const BloodBankPage: React.FC = () => {
         </TabsContent>
         <TabsContent value="issuelog" className="flex-1 overflow-hidden m-0">
           <IssueLogTab />
+        </TabsContent>
+        <TabsContent value="tti" className="flex-1 overflow-y-auto m-0">
+          <TTITestingTab />
         </TabsContent>
         <TabsContent value="reports" className="flex-1 overflow-hidden m-0">
           <ReportsTab />

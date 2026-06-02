@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, LayoutGrid, CalendarDays } from "lucide-react";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasActionAccess } from "@/lib/tabPermissions";
 import { format, startOfWeek, endOfWeek, addDays, startOfMonth, endOfMonth, isSameDay, isToday, addMonths, subMonths } from "date-fns";
 import { Progress } from "@/components/ui/progress";
 import { Calendar } from "@/components/ui/calendar";
@@ -52,6 +54,7 @@ const OTSchedulePanel: React.FC<Props> = ({
   schedules, selectedScheduleId, onSelectSchedule, onBookSlot, loading,
   viewMode, onSetViewMode, hospitalId,
 }) => {
+  const { permissions, role } = useHospitalContext();
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [weekSchedules, setWeekSchedules] = useState<OTSchedule[]>([]);
   const [monthSchedules, setMonthSchedules] = useState<OTSchedule[]>([]);
@@ -122,7 +125,7 @@ const OTSchedulePanel: React.FC<Props> = ({
   })();
 
   return (
-    <div className="w-80 flex-shrink-0 bg-card border-r border-border flex flex-col h-full">
+    <div className="w-full bg-card border-r border-border flex flex-col h-full">
       {/* Header */}
       <div className="p-3 border-b border-border flex-shrink-0">
         <div className="flex items-center justify-between">
@@ -145,12 +148,14 @@ const OTSchedulePanel: React.FC<Props> = ({
                 </button>
               ))}
             </div>
-            <button
-              onClick={() => onBookSlot()}
-              className="flex items-center gap-1 bg-[hsl(var(--sidebar-accent))] text-white text-[11px] font-semibold px-3 py-1.5 rounded-md hover:opacity-90 active:scale-95 transition-all"
-            >
-              <Plus size={14} /> Book OT
-            </button>
+            {hasActionAccess("ot", "book_case", permissions, role) && (
+              <button
+                onClick={() => onBookSlot()}
+                className="flex items-center gap-1 bg-[hsl(var(--sidebar-accent))] text-white text-[11px] font-semibold px-3 py-1.5 rounded-md hover:opacity-90 active:scale-95 transition-all"
+              >
+                <Plus size={14} /> Book OT
+              </button>
+            )}
           </div>
         </div>
 

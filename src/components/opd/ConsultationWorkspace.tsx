@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasTabAccess, hasActionAccess } from "@/lib/tabPermissions";
 import { Stethoscope, Mic, Save, CheckCircle, FlaskConical, Building2, Smartphone, ArrowUpRight, User, X, ScanLine, SendHorizonal, Printer } from "lucide-react";
 import AdmitPatientModal from "@/components/ipd/AdmitPatientModal";
 import type { OpdToken } from "@/pages/opd/OPDPage";
@@ -16,6 +18,7 @@ import OverdueFollowupBanner from "@/components/clinical/OverdueFollowupBanner";
 import { getSpecialtySheet, specialtyTabMeta } from "@/lib/specialtyDetection";
 import ObstetricSheet from "@/components/specialty/ObstetricSheet";
 import ReferralLetterModal from "@/components/opd/ReferralLetterModal";
+import DifferentialDiagnosisPanel from "@/components/opd/DifferentialDiagnosisPanel";
 import NeonatalSheet from "@/components/specialty/NeonatalSheet";
 import AnaesthesiaSheet from "@/components/specialty/AnaesthesiaSheet";
 import OphthalmologySheet from "@/components/specialty/OphthalmologySheet";
@@ -95,12 +98,19 @@ const emptyPrescription: PrescriptionData = {
   advice_notes: "", review_date: "", is_signed: false,
 };
 
-const BASE_TABS = ["Complaint", "Vitals", "Examination", "Rx & Orders", "History"] as const;
+const BASE_TABS = [
+  { key: "complaint", label: "Complaint" },
+  { key: "vitals", label: "Vitals" },
+  { key: "examination", label: "Examination" },
+  { key: "rx_orders", label: "Rx & Orders" },
+  { key: "history", label: "History" },
+] as const;
 
 const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onTokenUpdate, showPatientDetails, onTogglePatientDetails }) => {
   const { toast } = useToast();
   const { registerScreen, unregisterScreen } = useVoiceScribe();
-  const [activeTab, setActiveTab] = useState(0);
+  const { permissions, role } = useHospitalContext();
+  const [activeTab, setActiveTab] = useState("complaint");
   const [encounter, setEncounter] = useState<EncounterData>(emptyEncounter);
   const [prescription, setPrescription] = useState<PrescriptionData>(emptyPrescription);
   const [encounterId, setEncounterId] = useState<string | null>(null);
@@ -173,13 +183,19 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
 
   const specialty = useMemo(() => getSpecialtySheet(deptName), [deptName]);
   const TABS = useMemo(() => {
-    const base = [...BASE_TABS] as string[];
-    if (specialty) {
-      const meta = specialtyTabMeta[specialty];
-      base.push(`${meta.icon} ${meta.label}`);
+    const all: { key: string; label: string }[] = [
+      ...BASE_TABS,
+      ...(specialty ? [{ key: "specialty", label: `${specialtyTabMeta[specialty].icon} ${specialtyTabMeta[specialty].label}` }] : []),
+    ];
+    return all.filter((t) => hasTabAccess("opd", t.key, permissions, role));
+  }, [specialty, permissions, role]);
+
+  // Auto-reset activeTab to first available if current tab is no longer visible
+  useEffect(() => {
+    if (TABS.length > 0 && !TABS.some((t) => t.key === activeTab)) {
+      setActiveTab(TABS[0].key);
     }
-    return base;
-  }, [specialty]);
+  }, [TABS, activeTab]);
   const encounterRef = useRef(encounter);
   const prescriptionRef = useRef(prescription);
   encounterRef.current = encounter;
@@ -676,92 +692,132 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
       }
     }
 
-    // Auto-create OPD bill if none exists (e.g., portal booking / follow-up without walk-in)
+    // ── Consultation Fee Billing ──────────────────────────────────────────────
+    // Idempotency: guarded by opd_encounters.consultation_billed.
+    // Runs for EVERY consultation finalization — even if a walk-in bill exists.
+    // This is the authoritative consultation charge creation point.
     if (encounterId && hospitalId && userId) {
       try {
-        const today = new Date().toISOString().split("T")[0];
-        const { data: existingBill } = await (supabase as any)
-          .from("bills")
-          .select("id, encounter_id")
-          .eq("hospital_id", hospitalId)
-          .eq("patient_id", token.patient_id)
-          .eq("bill_type", "opd")
-          .eq("bill_date", today)
-          .limit(1)
+        // Check idempotency flag first
+        const { data: encounterRow } = await (supabase as any)
+          .from("opd_encounters")
+          .select("consultation_billed, consultation_bill_id, consultation_fee")
+          .eq("id", encounterId)
           .maybeSingle();
 
-        if (!existingBill) {
-          // No bill exists — create one (portal booking / follow-up scenario)
-          const { generateBillNumber } = await import("@/hooks/useBillNumber");
+        if (!encounterRow?.consultation_billed) {
+          const { autoChargeService, MODULE_OPD_CONSULT } = await import("@/lib/serviceBilling");
           const { autoPostJournalEntry } = await import("@/lib/accounting");
 
-          // Smart fee lookup: doctor_id FK → department_id FK → global → fallback
+          // Rate lookup priority: doctor → department → global → ₹500 fallback
           let fee = 500;
           if (token.doctor_id) {
             const { data: docSvc } = await (supabase as any).from("service_master").select("fee")
               .eq("hospital_id", hospitalId).eq("item_type", "consultation").eq("is_active", true)
-              .eq("doctor_id", token.doctor_id).limit(1);
-            if (docSvc?.[0]?.fee) fee = docSvc[0].fee;
+              .eq("doctor_id", token.doctor_id).limit(1).maybeSingle();
+            if (docSvc?.fee) fee = Number(docSvc.fee);
           }
           if (fee === 500 && token.department_id) {
             const { data: deptSvc } = await (supabase as any).from("service_master").select("fee")
               .eq("hospital_id", hospitalId).eq("item_type", "consultation").eq("is_active", true)
-              .eq("department_id", token.department_id).is("doctor_id", null).limit(1);
-            if (deptSvc?.[0]?.fee) fee = deptSvc[0].fee;
+              .eq("department_id", token.department_id).is("doctor_id", null).limit(1).maybeSingle();
+            if (deptSvc?.fee) fee = Number(deptSvc.fee);
           }
           if (fee === 500) {
             const { data: globalSvc } = await (supabase as any).from("service_master").select("fee")
               .eq("hospital_id", hospitalId).eq("item_type", "consultation").eq("is_active", true)
-              .is("doctor_id", null).is("department_id", null).limit(1);
-            if (globalSvc?.[0]?.fee) fee = globalSvc[0].fee;
+              .is("doctor_id", null).is("department_id", null).limit(1).maybeSingle();
+            if (globalSvc?.fee) fee = Number(globalSvc.fee);
           }
 
-          const billNumber = await generateBillNumber(hospitalId, "OPD");
-          const { data: bill } = await supabase.from("bills").insert({
-            hospital_id: hospitalId,
-            patient_id: token.patient_id,
-            bill_number: billNumber,
-            bill_type: "opd",
-            bill_date: today,
-            encounter_id: encounterId,
-            subtotal: fee,
-            total_amount: fee,
-            patient_payable: fee,
-            paid_amount: 0,
-            balance_due: fee,
-            payment_status: fee === 0 ? "paid" : "unpaid",
-            bill_status: "final",
-            created_by: userId,
-          }).select("id").maybeSingle();
+          // Find the OPD bill for this encounter (walk-in or portal)
+          const today = new Date().toISOString().split("T")[0];
+          const { data: encounterBill } = await (supabase as any)
+            .from("bills")
+            .select("id")
+            .eq("hospital_id", hospitalId)
+            .eq("patient_id", token.patient_id)
+            .eq("bill_type", "opd")
+            .gte("bill_date", today)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
 
-          if (bill) {
-            await supabase.from("bill_line_items").insert({
-              hospital_id: hospitalId,
-              bill_id: bill.id,
-              description: "Consultation Fee",
-              item_type: "consultation",
-              unit_rate: fee,
-              quantity: 1,
-              total_amount: fee,
-            });
+          let billId = encounterBill?.id;
 
-            await autoPostJournalEntry({
-              triggerEvent: "bill_finalized_opd",
-              sourceModule: "billing",
-              sourceId: bill.id,
-              amount: fee,
-              description: `OPD Revenue - Bill ${billNumber}`,
-              hospitalId,
-              postedBy: userId,
-            });
+          if (!billId) {
+            // No bill at all — create one (pure follow-up / portal booking)
+            const { generateBillNumber } = await import("@/hooks/useBillNumber");
+            const billNumber = await generateBillNumber(hospitalId, "OPD");
+            const { data: newBill } = await (supabase as any).from("bills").insert({
+              hospital_id: hospitalId, patient_id: token.patient_id,
+              bill_number: billNumber, bill_type: "opd", bill_date: today,
+              encounter_id: encounterId, bill_status: "final", payment_status: "unpaid",
+              subtotal: 0, gst_amount: 0, total_amount: 0,
+              patient_payable: 0, balance_due: 0, created_by: userId,
+            }).select("id").maybeSingle();
+            billId = newBill?.id;
+          }
 
-            if (fee > 0) {
-              toast({ title: `Consultation fee: ₹${fee.toLocaleString("en-IN")} (payment pending at billing counter)` });
+          if (billId && fee > 0) {
+            // Always link encounter to bill
+            await (supabase as any).from("bills")
+              .update({ encounter_id: encounterId })
+              .eq("id", billId)
+              .is("encounter_id", null);
+
+            // Add consultation line item (dedupe key prevents double-billing)
+            const dedupeKey = `opd_consult:${encounterId}`;
+            const { data: existingItem } = await (supabase as any)
+              .from("bill_line_items")
+              .select("id")
+              .eq("bill_id", billId)
+              .eq("source_dedupe_key", dedupeKey)
+              .maybeSingle();
+
+            if (!existingItem) {
+              await (supabase as any).from("bill_line_items").insert({
+                hospital_id:      hospitalId,
+                bill_id:          billId,
+                description:      "Consultation Fee",
+                item_type:        "consultation",
+                unit_rate:        fee,
+                quantity:         1,
+                taxable_amount:   fee,
+                gst_percent:      0,
+                gst_amount:       0,
+                total_amount:     fee,
+                service_date:     today,
+                source_module:    "opd",
+                source_record_id: encounterId,
+                source_dedupe_key: dedupeKey,
+                ordered_by:       userId,
+              });
+
+              // Recalculate bill totals
+              const { recalculateBillTotalsSafe } = await import("@/lib/billTotals");
+              await recalculateBillTotalsSafe(billId);
+
+              await autoPostJournalEntry({
+                triggerEvent: "bill_finalized_opd", sourceModule: "billing",
+                sourceId: billId, amount: fee,
+                description: `OPD Consultation - ${token.patient?.full_name}`,
+                hospitalId, postedBy: userId,
+              });
+
+              toast({ title: `Consultation fee ₹${fee.toLocaleString("en-IN")} added to bill` });
             }
           }
+
+          // Mark encounter as consultation-billed (idempotency)
+          await (supabase as any).from("opd_encounters").update({
+            consultation_billed:  true,
+            consultation_bill_id: billId ?? null,
+            consultation_fee:     fee,
+          }).eq("id", encounterId);
         }
       } catch (billErr) {
-        console.error("Follow-up billing error (non-blocking):", billErr);
+        console.error("Consultation billing error (non-blocking):", billErr);
       }
     }
 
@@ -865,18 +921,18 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
 
       {/* Tab strip */}
       <div className="flex-shrink-0 h-12 bg-white border-b border-slate-200 flex">
-        {TABS.map((tab, i) => (
+        {TABS.map((tab) => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(i)}
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
             className={cn(
               "px-5 h-full text-[13px] border-b-2 transition-colors",
-              activeTab === i
+              activeTab === tab.key
                 ? "border-[#1A2F5A] text-[#1A2F5A] font-semibold"
                 : "border-transparent text-slate-500 hover:text-slate-700"
             )}
           >
-            {tab}
+            {tab.label}
           </button>
         ))}
         {/* Save indicator */}
@@ -891,21 +947,43 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 0 && <ComplaintTab encounter={encounter} onChange={updateEncounter} />}
-        {activeTab === 1 && <VitalsTab encounter={encounter} onChange={updateEncounter} />}
-        {activeTab === 2 && <ExaminationTab encounter={encounter} onChange={updateEncounter} encounterId={encounterId} hospitalId={hospitalId} patientId={token?.patient_id ?? null} userId={userId} />}
-        {activeTab === 3 && <RxOrdersTab prescription={prescription} onChange={updatePrescription} hospitalId={hospitalId} patientAllergies={token?.patient?.allergies ? token.patient.allergies.split(",").map(a => a.trim()) : []} diagnosis={encounter.diagnosis} icdCode={encounter.icd10_code} patientAge={patientAge || undefined} patientGender={token?.patient?.gender || undefined} />}
-        {activeTab === 4 && <HistoryTab token={token} encounterId={encounterId} />}
-        {activeTab === 5 && specialty === 'obstetric' && hospitalId && (
+        {activeTab === "complaint" && <ComplaintTab encounter={encounter} onChange={updateEncounter} />}
+        {activeTab === "vitals" && <VitalsTab encounter={encounter} onChange={updateEncounter} />}
+        {activeTab === "examination" && (
+          <div className="h-full overflow-y-auto flex flex-col">
+            <ExaminationTab encounter={encounter} onChange={updateEncounter} encounterId={encounterId} hospitalId={hospitalId} patientId={token?.patient_id ?? null} userId={userId} />
+            {hospitalId && encounter.chief_complaint && (
+              <div className="px-4 pb-4 shrink-0">
+                <DifferentialDiagnosisPanel
+                  chiefComplaint={encounter.chief_complaint}
+                  examination={encounter.examination_notes}
+                  history={encounter.history_of_present_illness}
+                  vitals={encounter.vitals as Record<string, any>}
+                  age={patientAge ?? undefined}
+                  gender={token?.patient?.gender ?? undefined}
+                  hospitalId={hospitalId}
+                  patientId={token?.patient_id ?? null}
+                  encounterId={encounterId}
+                  onSelectDiagnosis={(diagnosis, icd10) =>
+                    updateEncounter({ diagnosis, icd10_code: icd10 })
+                  }
+                />
+              </div>
+            )}
+          </div>
+        )}
+        {activeTab === "rx_orders" && <RxOrdersTab prescription={prescription} onChange={updatePrescription} hospitalId={hospitalId} patientAllergies={token?.patient?.allergies ? token.patient.allergies.split(",").map(a => a.trim()) : []} diagnosis={encounter.diagnosis} icdCode={encounter.icd10_code} patientAge={patientAge || undefined} patientGender={token?.patient?.gender || undefined} />}
+        {activeTab === "history" && <HistoryTab token={token} encounterId={encounterId} />}
+        {activeTab === "specialty" && specialty === 'obstetric' && hospitalId && (
           <ObstetricSheet patientId={token.patient_id} hospitalId={hospitalId} encounterId={encounterId} />
         )}
-        {activeTab === 5 && specialty === 'neonatal' && hospitalId && (
+        {activeTab === "specialty" && specialty === 'neonatal' && hospitalId && (
           <NeonatalSheet patientId={token.patient_id} hospitalId={hospitalId} encounterId={encounterId} />
         )}
-        {activeTab === 5 && specialty === 'anaesthesia' && hospitalId && (
+        {activeTab === "specialty" && specialty === 'anaesthesia' && hospitalId && (
           <AnaesthesiaSheet patientId={token.patient_id} hospitalId={hospitalId} encounterId={encounterId} />
         )}
-        {activeTab === 5 && specialty === 'ophthalmology' && hospitalId && (
+        {activeTab === "specialty" && specialty === 'ophthalmology' && hospitalId && (
           <OphthalmologySheet patientId={token.patient_id} hospitalId={hospitalId} encounterId={encounterId} />
         )}
       </div>
@@ -915,51 +993,62 @@ const ConsultationWorkspace: React.FC<Props> = ({ token, hospitalId, userId, onT
         <button onClick={() => autoSaveEncounter(encounter)} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
           <Save className="h-3.5 w-3.5" /> Save Draft
         </button>
-        <button onClick={handleComplete} className="text-xs bg-[#1A2F5A] text-white px-4 py-1.5 rounded-md font-semibold hover:bg-[#152647] flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <CheckCircle className="h-3.5 w-3.5" /> Complete & Bill
-        </button>
+        {hasActionAccess("opd", "complete_and_bill", permissions, role) && (
+          <button onClick={handleComplete} className="text-xs bg-[#1A2F5A] text-white px-4 py-1.5 rounded-md font-semibold hover:bg-[#152647] flex items-center gap-1.5 active:scale-[0.97] transition-all">
+            <CheckCircle className="h-3.5 w-3.5" /> Complete & Bill
+          </button>
+        )}
         <VoiceDictationButton sessionType="opd_consultation" size="sm" />
         <div className="flex-1" />
-        <button onClick={() => {
-          if (!token?.patient_id || !hospitalId) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
-          setShowLabModal(true);
-        }} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <FlaskConical className="h-3.5 w-3.5" /> Order Lab
-        </button>
-        <button onClick={async () => {
-          if (!token?.patient_id || !hospitalId) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
-          // Flush any pending debounce so prescription.radiology_orders reaches DB before modal fetches
-          if (saveTimer.current) clearTimeout(saveTimer.current);
-          await autoSavePrescription(prescription);
-          setShowRadiologyModal(true);
-        }} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <ScanLine className="h-3.5 w-3.5" /> Order Radiology
-        </button>
-        <button onClick={() => {
-          if (!token?.patient_id) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
-          setShowAdmitModal(true);
-        }} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <Building2 className="h-3.5 w-3.5" /> Admit
-        </button>
-        <button onClick={async () => {
-          if (!token || !hospitalId || !userId) return;
-          const { error } = await supabase.from("physio_referrals").insert({
-            hospital_id: hospitalId,
-            patient_id: token.patient_id,
-            opd_encounter_id: encounterId || undefined,
-            referred_by: userId,
-            diagnosis: encounter.diagnosis || encounter.chief_complaint || "Physiotherapy referral",
-            goals: [],
-            urgency: "routine",
-          } as any);
-          if (error) { toast({ title: "Referral failed", description: error.message, variant: "destructive" }); return; }
-          toast({ title: "↗ Referred to Physiotherapy" });
-        }} className="text-xs text-teal-700 border border-teal-300 px-3 py-1.5 rounded-md hover:bg-teal-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <ArrowUpRight className="h-3.5 w-3.5" /> Refer Physio
-        </button>
-        <button onClick={handleSendWhatsApp} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
-          <Smartphone className="h-3.5 w-3.5" /> Send Rx
-        </button>
+        {hasActionAccess("opd", "order_lab", permissions, role) && (
+          <button onClick={() => {
+            if (!token?.patient_id || !hospitalId) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
+            setShowLabModal(true);
+          }} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
+            <FlaskConical className="h-3.5 w-3.5" /> Order Lab
+          </button>
+        )}
+        {hasActionAccess("opd", "order_radiology", permissions, role) && (
+          <button onClick={async () => {
+            if (!token?.patient_id || !hospitalId) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+            await autoSavePrescription(prescription);
+            setShowRadiologyModal(true);
+          }} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
+            <ScanLine className="h-3.5 w-3.5" /> Order Radiology
+          </button>
+        )}
+        {hasActionAccess("opd", "admit_patient", permissions, role) && (
+          <button onClick={() => {
+            if (!token?.patient_id) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
+            setShowAdmitModal(true);
+          }} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
+            <Building2 className="h-3.5 w-3.5" /> Admit
+          </button>
+        )}
+        {hasActionAccess("opd", "refer_physio", permissions, role) && (
+          <button onClick={async () => {
+            if (!token || !hospitalId || !userId) return;
+            const { error } = await supabase.from("physio_referrals").insert({
+              hospital_id: hospitalId,
+              patient_id: token.patient_id,
+              opd_encounter_id: encounterId || undefined,
+              referred_by: userId,
+              diagnosis: encounter.diagnosis || encounter.chief_complaint || "Physiotherapy referral",
+              goals: [],
+              urgency: "routine",
+            } as any);
+            if (error) { toast({ title: "Referral failed", description: error.message, variant: "destructive" }); return; }
+            toast({ title: "↗ Referred to Physiotherapy" });
+          }} className="text-xs text-teal-700 border border-teal-300 px-3 py-1.5 rounded-md hover:bg-teal-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
+            <ArrowUpRight className="h-3.5 w-3.5" /> Refer Physio
+          </button>
+        )}
+        {hasActionAccess("opd", "send_rx", permissions, role) && (
+          <button onClick={handleSendWhatsApp} className="text-xs text-slate-600 border border-slate-200 px-3 py-1.5 rounded-md hover:bg-slate-50 flex items-center gap-1.5 active:scale-[0.97] transition-all">
+            <Smartphone className="h-3.5 w-3.5" /> Send Rx
+          </button>
+        )}
         {/* Language selector for bilingual prescription print */}
         {availablePrintLangs.length > 1 && (
           <select

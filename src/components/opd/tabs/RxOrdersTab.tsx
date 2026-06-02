@@ -11,6 +11,7 @@ import { isAntibioticByName } from "@/lib/high-alert-meds";
 import AntibioticJustificationModal from "@/components/quality/AntibioticJustificationModal";
 import ClinicalDecisionSupport from "@/components/opd/ClinicalDecisionSupport";
 import { useToast } from "@/hooks/use-toast";
+import { useConfigValues } from "@/hooks/useConfigValues";
 
 interface Props {
   prescription: PrescriptionData;
@@ -26,8 +27,6 @@ interface Props {
   isSaving?: boolean;
 }
 
-const FREQUENCIES = ["OD", "BD", "TDS", "QID", "SOS", "STAT", "HS", "AC", "PC"];
-const ROUTES = ["Oral", "IV", "IM", "SC", "Topical", "Inhaled", "Sublingual"];
 
 const FREQ_PER_DAY: Record<string, number> = {
   OD: 1, QD: 1, HS: 1, SOS: 1, STAT: 1, AC: 1, PC: 1,
@@ -58,6 +57,8 @@ interface DrugSafetyMeta {
 
 const RxOrdersTab: React.FC<Props> = ({ prescription, onChange, hospitalId, patientAllergies = [], diagnosis, icdCode, patientAge, patientGender, encounterId, onCommit, isSaving }) => {
   const { toast } = useToast();
+  const routeOptions     = useConfigValues("drug_routes");
+  const frequencyOptions = useConfigValues("drug_frequencies");
   const [showAddDrug, setShowAddDrug] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ drug_name: string; generic_name: string | null; is_ndps: boolean }[]>([]);
@@ -403,7 +404,7 @@ const RxOrdersTab: React.FC<Props> = ({ prescription, onChange, hospitalId, pati
                   className="h-8 px-2 border border-border rounded text-xs outline-none bg-background text-foreground"
                 />
                 <select value={newDrug.route} onChange={(e) => setNewDrug((d) => ({ ...d, route: e.target.value }))} className="h-8 px-1 border border-border rounded text-xs outline-none bg-background text-foreground">
-                  {ROUTES.map((r) => <option key={r}>{r}</option>)}
+                  {routeOptions.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
                 <select
                   value={newDrug.frequency}
@@ -414,7 +415,7 @@ const RxOrdersTab: React.FC<Props> = ({ prescription, onChange, hospitalId, pati
                   })}
                   className="h-8 px-1 border border-border rounded text-xs outline-none bg-background text-foreground"
                 >
-                  {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
+                  {frequencyOptions.map((f) => <option key={f.value} value={f.value}>{f.value}</option>)}
                 </select>
                 <input
                   value={newDrug.duration_days}

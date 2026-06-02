@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import CollapsiblePanel from "@/components/layout/CollapsiblePanel";
 import OTSchedulePanel from "@/components/ot/OTSchedulePanel";
 import OTCaseWorkspace from "@/components/ot/OTCaseWorkspace";
 import OTInfoPanel from "@/components/ot/OTInfoPanel";
@@ -169,44 +170,48 @@ const OTPage: React.FC = () => {
 
   return (
     <div className="flex h-[calc(100vh-56px)] overflow-hidden">
-      <OTSchedulePanel
-        rooms={rooms}
-        selectedRoomId={selectedRoomId}
-        onSelectRoom={setSelectedRoomId}
-        selectedDate={selectedDate}
-        onSetSelectedDate={setSelectedDate}
-        onDateChange={handleDateChange}
-        onSetToday={() => setSelectedDate(new Date())}
-        schedules={schedules}
-        selectedScheduleId={selectedScheduleId}
-        onSelectSchedule={setSelectedScheduleId}
-        onBookSlot={handleBookSlot}
-        loading={loading}
-        viewMode={viewMode}
-        onSetViewMode={setViewMode}
-        hospitalId={hospitalId}
-      />
+      <CollapsiblePanel panelKey="ot_schedule" title="OT Schedule" side="left" expandedWidth="w-80">
+        <OTSchedulePanel
+          rooms={rooms}
+          selectedRoomId={selectedRoomId}
+          onSelectRoom={setSelectedRoomId}
+          selectedDate={selectedDate}
+          onSetSelectedDate={setSelectedDate}
+          onDateChange={handleDateChange}
+          onSetToday={() => setSelectedDate(new Date())}
+          schedules={schedules}
+          selectedScheduleId={selectedScheduleId}
+          onSelectSchedule={setSelectedScheduleId}
+          onBookSlot={handleBookSlot}
+          loading={loading}
+          viewMode={viewMode}
+          onSetViewMode={setViewMode}
+          hospitalId={hospitalId}
+        />
+      </CollapsiblePanel>
       <OTCaseWorkspace
         schedule={selectedSchedule}
         hospitalId={hospitalId}
         onRefresh={fetchSchedules}
       />
-      <div className="flex flex-col overflow-hidden border-l border-border">
-        <OTInfoPanel
-          schedules={schedules}
-          selectedDate={selectedDate}
-          onSelectSchedule={setSelectedScheduleId}
-          hospitalId={hospitalId}
-          onSetSelectedDate={setSelectedDate}
-          onSetSelectedRoom={setSelectedRoomId}
-          onSetViewMode={setViewMode}
-        />
-        <OTOptimizerPanel
-          schedules={schedules}
-          hospitalId={hospitalId}
-          selectedDate={selectedDate}
-        />
-      </div>
+      <CollapsiblePanel panelKey="ot_info" title="OT Info" side="right" expandedWidth="w-[300px]">
+        <div className="flex flex-col h-full overflow-hidden border-l border-border">
+          <OTInfoPanel
+            schedules={schedules}
+            selectedDate={selectedDate}
+            onSelectSchedule={setSelectedScheduleId}
+            hospitalId={hospitalId}
+            onSetSelectedDate={setSelectedDate}
+            onSetSelectedRoom={setSelectedRoomId}
+            onSetViewMode={setViewMode}
+          />
+          <OTOptimizerPanel
+            schedules={schedules}
+            hospitalId={hospitalId}
+            selectedDate={selectedDate}
+          />
+        </div>
+      </CollapsiblePanel>
       {bookModalOpen && (
         <BookOTModal
           rooms={rooms}

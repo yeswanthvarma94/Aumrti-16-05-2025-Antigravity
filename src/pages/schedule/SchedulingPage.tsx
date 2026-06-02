@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import PatientSearchPicker from "@/components/shared/PatientSearchPicker";
 import { sendWhatsApp } from "@/lib/whatsapp-send";
 import { cn } from "@/lib/utils";
+import NoShowRiskPanel from "@/components/schedule/NoShowRiskPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -302,11 +303,29 @@ const SchedulingPage: React.FC = () => {
                   </Button>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-4">
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {panelView === "slots" ? (
                   <SlotGrid slots={doctorSlots} appointments={doctorAppts} onBook={setBookingSlot} onViewAppt={setViewingAppt} />
                 ) : (
                   <QueuePanel appointments={doctorAppts} hospitalId={hospitalId!} onRefresh={refresh} />
+                )}
+                {hospitalId && doctorAppts.length > 0 && (
+                  <NoShowRiskPanel
+                    hospitalId={hospitalId}
+                    date={format(selectedDate, "yyyy-MM-dd")}
+                    appointments={doctorAppts.map(a => ({
+                      id: a.id,
+                      patient_id: a.patient_id,
+                      appointment_date: a.appointment_date,
+                      slot_time: a.slot_time,
+                      visit_type: a.visit_type,
+                      chief_complaint: a.chief_complaint,
+                      status: a.status,
+                      patient_name: (a as any).patient?.full_name,
+                      patient_phone: (a as any).patient?.phone,
+                      doctor_name: selectedDoctorName,
+                    }))}
+                  />
                 )}
               </div>
             </>

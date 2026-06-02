@@ -2,6 +2,8 @@ import React from "react";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { EDVisit } from "@/pages/emergency/EmergencyPage";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasActionAccess } from "@/lib/tabPermissions";
 
 interface Props {
   visits: EDVisit[];
@@ -27,6 +29,7 @@ const borderLeftColors: Record<string, string> = {
 };
 
 const TriageBoard: React.FC<Props> = ({ visits, selectedId, onSelect, onRegister, onTriageChange, loading }) => {
+  const { permissions, role } = useHospitalContext();
   const handleDragStart = (e: React.DragEvent, visitId: string) => {
     e.dataTransfer.setData("visitId", visitId);
   };
@@ -42,13 +45,15 @@ const TriageBoard: React.FC<Props> = ({ visits, selectedId, onSelect, onRegister
       {/* Top bar */}
       <div className="flex items-center justify-between mb-2 flex-shrink-0">
         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Triage Board</span>
-        <button
-          onClick={onRegister}
-          className="h-9 px-5 rounded-lg text-[13px] font-bold text-white active:scale-[0.97] transition-all"
-          style={{ background: "#22C55E" }}
-        >
-          + Register Emergency Patient
-        </button>
+        {hasActionAccess("emergency", "register_patient", permissions, role) && (
+          <button
+            onClick={onRegister}
+            className="h-9 px-5 rounded-lg text-[13px] font-bold text-white active:scale-[0.97] transition-all"
+            style={{ background: "#22C55E" }}
+          >
+            + Register Emergency Patient
+          </button>
+        )}
       </div>
 
       {/* Columns */}

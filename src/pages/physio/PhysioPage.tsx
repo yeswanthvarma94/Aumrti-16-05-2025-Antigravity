@@ -238,7 +238,9 @@ const PhysioPage: React.FC = () => {
 
   // Physio billing
   const createPhysioBill = async (session: any) => {
-    // hospitalId comes from useHospitalId hook
+    // Idempotency guard — skip if already billed
+    if (session.billed) return;
+    const dedupeKey = `physio:session:${session.id}`;
 
     const { data: rate } = await (supabase as any)
       .from("service_master")
@@ -266,20 +268,25 @@ const PhysioPage: React.FC = () => {
         .maybeSingle();
 
       if (ipdBill) {
-        await (supabase as any).from("bill_line_items").insert({
-          hospital_id: hospitalId,
-          bill_id: ipdBill.id,
-          item_type: "physio",
-          description: `Physiotherapy: ${session.modalities_used?.join(", ") || "Session"} — ${session.session_date}`,
-          quantity: 1, unit_rate: fee,
-          taxable_amount: fee, gst_percent: gstPct,
-          gst_amount: gst, total_amount: fee + gst,
-          source_module: "physio",
-        });
+        const { data: existingItem } = await (supabase as any)
+          .from("bill_line_items").select("id")
+          .eq("bill_id", ipdBill.id).eq("source_dedupe_key", dedupeKey).maybeSingle();
 
-        const result = await recalculateBillTotalsSafe(ipdBill.id);
-        if (!result.ok) {
-          console.error("Physio IPD bill recalculation failed:", result.error);
+        if (!existingItem) {
+          await (supabase as any).from("bill_line_items").insert({
+            hospital_id: hospitalId,
+            bill_id: ipdBill.id,
+            item_type: "physio",
+            description: `Physiotherapy: ${session.modalities_used?.join(", ") || "Session"} — ${session.session_date}`,
+            quantity: 1, unit_rate: fee,
+            taxable_amount: fee, gst_percent: gstPct,
+            gst_amount: gst, total_amount: fee + gst,
+            source_module: "physio",
+            source_record_id: session.id,
+            source_dedupe_key: dedupeKey,
+          });
+          const result = await recalculateBillTotalsSafe(ipdBill.id);
+          if (!result.ok) console.error("Physio IPD bill recalculation failed:", result.error);
         }
         return;
       }
@@ -316,6 +323,8 @@ const PhysioPage: React.FC = () => {
         taxable_amount: fee, gst_percent: gstPct,
         gst_amount: gst, total_amount: fee + gst,
         source_module: "physio",
+        source_record_id: session.id,
+        source_dedupe_key: dedupeKey,
       });
 
       await recalculateBillTotalsSafe(newBill.id);

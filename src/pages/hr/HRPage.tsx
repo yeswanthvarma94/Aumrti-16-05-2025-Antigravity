@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useHospitalId } from "@/hooks/useHospitalId";
-import { Calendar, CheckSquare, Palmtree, DollarSign, Users, FileText, ShieldCheck, AlertTriangle, Award, GraduationCap, Clock, BarChart2, Link2 } from "lucide-react";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasTabAccess } from "@/lib/tabPermissions";
+import { Calendar, CheckSquare, Palmtree, DollarSign, Users, FileText, ShieldCheck, AlertTriangle, Award, GraduationCap, Clock, BarChart2, Link2, Calculator, HeartPulse, Star, HeartHandshake } from "lucide-react";
 import NABHBadge from "@/components/nabh/NABHBadge";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
@@ -9,6 +11,7 @@ import RosterTab from "@/components/hr/RosterTab";
 import AttendanceTab from "@/components/hr/AttendanceTab";
 import LeaveManagementTab from "@/components/hr/LeaveManagementTab";
 import PayrollTab from "@/components/hr/PayrollTab";
+import PayrollRunTab from "@/components/hr/PayrollRunTab";
 import StaffDirectoryTab from "@/components/hr/StaffDirectoryTab";
 import CredentialingTab from "@/components/hr/CredentialingTab";
 import PrivilegesTab from "@/components/hr/PrivilegesTab";
@@ -17,6 +20,9 @@ import StaffInjuriesTab from "@/components/hr/StaffInjuriesTab";
 import ExpiringCredentialsTab from "@/components/hr/ExpiringCredentialsTab";
 import PayrollIntegrationsTab from "@/components/hr/PayrollIntegrationsTab";
 import TrainingComplianceTab from "@/components/hr/TrainingComplianceTab";
+import PerformanceAppraisalTab from "@/components/hr/PerformanceAppraisalTab";
+import OccupationalHealthTab from "@/components/hr/OccupationalHealthTab";
+import BurnoutRiskTab from "@/components/hr/BurnoutRiskTab";
 import { Button } from "@/components/ui/button";
 import { useCredentialAlert } from "@/contexts/CredentialAlertContext";
 
@@ -24,21 +30,26 @@ const navTabs = [
   { id: "roster",      label: "Roster",               icon: Calendar },
   { id: "attendance",  label: "Attendance",            icon: CheckSquare },
   { id: "leave",       label: "Leave Management",      icon: Palmtree },
-  { id: "payroll",     label: "Payroll",               icon: DollarSign },
+  { id: "payroll",     label: "Payroll (Legacy)",      icon: DollarSign },
+  { id: "payroll_run", label: "Payroll Run (PF/ESI/TDS)", icon: Calculator },
   { id: "directory",   label: "Staff Directory",       icon: Users },
   { id: "credentials", label: "Credentials",           icon: ShieldCheck },
   { id: "expiring",    label: "Expiring Credentials",  icon: Clock },
   { id: "privileges",  label: "Privileges",            icon: Award },
   { id: "training",    label: "Training & CME",        icon: GraduationCap },
   { id: "compliance",  label: "Training Compliance",   icon: BarChart2 },
-  { id: "injuries",              label: "Injury Register",      icon: AlertTriangle },
-  { id: "payroll_integrations",  label: "Payroll Integrations", icon: Link2 },
-  { id: "reports",               label: "Reports",              icon: FileText },
+  { id: "injuries",              label: "Injury Register",          icon: AlertTriangle },
+  { id: "performance",           label: "Performance Appraisals",   icon: Star },
+  { id: "occupational_health",   label: "Occupational Health",      icon: HeartPulse },
+  { id: "burnout",               label: "Burnout Risk Monitor",     icon: HeartHandshake },
+  { id: "payroll_integrations",  label: "Payroll Integrations",     icon: Link2 },
+  { id: "reports",               label: "Reports",                  icon: FileText },
 ];
 
 const HRPage: React.FC = () => {
   const navigate = useNavigate();
   const { hospitalId } = useHospitalId();
+  const { permissions, role } = useHospitalContext();
   const { expiringCount } = useCredentialAlert();
   const [activeTab, setActiveTab] = useState("roster");
   const [kpis, setKpis] = useState({
@@ -102,6 +113,7 @@ const HRPage: React.FC = () => {
       case "attendance":  return <AttendanceTab />;
       case "leave":       return <LeaveManagementTab />;
       case "payroll":     return <PayrollTab />;
+      case "payroll_run": return <PayrollRunTab />;
       case "directory":   return <StaffDirectoryTab />;
       case "credentials": return hospitalId ? <CredentialingTab hospitalId={hospitalId} /> : null;
       case "expiring":    return <ExpiringCredentialsTab />;
@@ -109,6 +121,9 @@ const HRPage: React.FC = () => {
       case "training":    return hospitalId ? <TrainingCMETab hospitalId={hospitalId} /> : null;
       case "compliance":  return hospitalId ? <TrainingComplianceTab hospitalId={hospitalId} /> : null;
       case "injuries":               return <StaffInjuriesTab />;
+      case "performance":            return hospitalId ? <PerformanceAppraisalTab hospitalId={hospitalId} /> : null;
+      case "occupational_health":    return hospitalId ? <OccupationalHealthTab hospitalId={hospitalId} /> : null;
+      case "burnout":                return hospitalId ? <BurnoutRiskTab hospitalId={hospitalId} /> : null;
       case "payroll_integrations":   return hospitalId ? <PayrollIntegrationsTab hospitalId={hospitalId} /> : null;
       default:
         return (
@@ -182,7 +197,7 @@ const HRPage: React.FC = () => {
       <div className="flex flex-1 overflow-hidden">
         {/* Left Nav */}
         <div className="w-[220px] bg-card border-r border-border flex flex-col overflow-y-auto">
-          {navTabs.map((tab) => {
+          {navTabs.filter((tab) => hasTabAccess("hr", tab.id, permissions, role)).map((tab) => {
             const Icon = tab.icon;
             const isExpiring = tab.id === "expiring";
             return (

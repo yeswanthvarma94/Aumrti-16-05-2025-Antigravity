@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Send, Bot, Package, AlertTriangle, Plus, Sparkles, Loader2, Download, CheckCircle2 } from "lucide-react";
+import { Send, Bot, Package, AlertTriangle, Plus, Sparkles, Loader2, Download, CheckCircle2, Clock } from "lucide-react";
+import { addDays, differenceInDays, format } from "date-fns";
 import DenialPredictorPanel from "@/components/insurance/DenialPredictorPanel";
 import ClaimBundleGenerator from "@/components/insurance/ClaimBundleGenerator";
 import ClaimsPackWizard from "@/components/insurance/ClaimsPackWizard";
@@ -22,6 +23,20 @@ interface ClaimRow {
   has_pre_auth: boolean;
   patient_id: string;
   admission_id?: string | null;
+  discharged_at?: string | null;
+  submission_deadline?: string | null;
+}
+
+function submissionDeadlineBadge(row: ClaimRow): React.ReactNode {
+  if (!row.submission_deadline) return null;
+  const daysLeft = differenceInDays(new Date(row.submission_deadline), new Date());
+  if (daysLeft < 0)
+    return <Badge className="bg-red-100 text-red-700 border-red-200 text-[10px]">⚠ Deadline passed ({Math.abs(daysLeft)}d ago)</Badge>;
+  if (daysLeft <= 7)
+    return <Badge className="bg-red-100 text-red-700 border-red-200 text-[10px] animate-pulse">🔴 Submit by {format(new Date(row.submission_deadline), "dd/MM/yy")} ({daysLeft}d)</Badge>;
+  if (daysLeft <= 15)
+    return <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[10px]">⏰ {daysLeft}d left to submit</Badge>;
+  return null;
 }
 
 const ClaimsToSubmit: React.FC = () => {
@@ -70,13 +85,16 @@ const ClaimsToSubmit: React.FC = () => {
     const [claimsRes, patientsRes, admRes, preAuthRes] = await Promise.all([
       supabase.from("insurance_claims").select("bill_id").in("bill_id", billIds),
       supabase.from("patients").select("id, full_name").in("id", patientIds),
-      admissionIds.length ? supabase.from("admissions").select("id, insurance_type").in("id", admissionIds).neq("insurance_type", "self_pay") : Promise.resolve({ data: [] }),
+      admissionIds.length ? (supabase as any).from("admissions").select("id, insurance_type, discharged_at").in("id", admissionIds).neq("insurance_type", "self_pay") : Promise.resolve({ data: [] }),
       admissionIds.length ? supabase.from("insurance_pre_auth").select("admission_id, status").in("admission_id", admissionIds) : Promise.resolve({ data: [] }),
     ]);
 
     const claimedBills = new Set((claimsRes.data || []).map(c => c.bill_id));
     const pMap = Object.fromEntries((patientsRes.data || []).map(p => [p.id, p.full_name]));
-    const insuranceAdmissions = new Set((admRes.data || []).map(a => a.id));
+    const insuranceAdmissions = new Set((admRes.data || []).map((a: any) => a.id));
+    const dischargeMap: Record<string, string | null> = Object.fromEntries(
+      (admRes.data || []).map((a: any) => [a.id, (a as any).discharged_at || null])
+    );
     const preAuthMap = Object.fromEntries((preAuthRes.data || []).map(pa => [pa.admission_id, pa.status]));
 
     const eligible = bills.filter(b => !claimedBills.has(b.id) && b.admission_id && insuranceAdmissions.has(b.admission_id));
@@ -89,6 +107,11 @@ const ClaimsToSubmit: React.FC = () => {
       if (Number(b.total_amount) > 200000) risk += 15;
       risk = Math.max(0, Math.min(100, risk));
 
+      const dischargedAt = b.admission_id ? (dischargeMap[b.admission_id] ?? null) : null;
+      const submissionDeadline = dischargedAt
+        ? addDays(new Date(dischargedAt), 60).toISOString().slice(0, 10)
+        : null;
+
       return {
         bill_id: b.id,
         bill_number: b.bill_number,
@@ -99,6 +122,8 @@ const ClaimsToSubmit: React.FC = () => {
         has_pre_auth: hasPreAuth,
         patient_id: b.patient_id,
         admission_id: b.admission_id,
+        discharged_at: dischargedAt,
+        submission_deadline: submissionDeadline,
       };
     }));
     setLoading(false);
@@ -149,12 +174,13 @@ const ClaimsToSubmit: React.FC = () => {
               <TableHead className="text-[11px]">Amount</TableHead>
               <TableHead className="text-[11px]">Pre-Auth</TableHead>
               <TableHead className="text-[11px]">Denial Risk</TableHead>
+              <TableHead className="text-[11px]">Submit By</TableHead>
               <TableHead className="text-[11px]">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
-              <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground text-sm py-8">No claims ready to submit</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground text-sm py-8">No claims ready to submit</TableCell></TableRow>
             ) : rows.map(r => (
               <TableRow key={r.bill_id}>
                 <TableCell className="text-[13px] font-medium">{r.patient_name}</TableCell>
@@ -167,6 +193,19 @@ const ClaimsToSubmit: React.FC = () => {
                     : <Badge variant="outline" className="text-[10px] text-amber-600">Missing</Badge>}
                 </TableCell>
                 <TableCell>{riskBadge(r.denial_risk)}</TableCell>
+                <TableCell>
+                  <div className="flex flex-col gap-0.5">
+                    {r.discharged_at
+                      ? submissionDeadlineBadge(r) ?? (
+                          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <Clock size={10} />
+                            {r.submission_deadline ? format(new Date(r.submission_deadline), "dd/MM/yy") : "—"}
+                          </span>
+                        )
+                      : <span className="text-[10px] text-muted-foreground">Still admitted</span>
+                    }
+                  </div>
+                </TableCell>
                 <TableCell>
                   <div className="flex flex-col gap-1">
                     <div className="flex gap-1 flex-wrap">
@@ -284,7 +323,7 @@ const ClaimsToSubmit: React.FC = () => {
               setSelectedForReview(null);
             }}
             onProceedSubmit={() => {
-              submitClaim(selectedForReview);
+              handleSubmitClaim(selectedForReview);
               setSelectedForReview(null);
             }}
           />

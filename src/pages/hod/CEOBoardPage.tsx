@@ -70,8 +70,9 @@ const CEOBoardPage: React.FC = () => {
             .eq("hospital_id", h.id).gte("created_at", startOfToday),
           supabase.from("admissions").select("id", { count: "exact", head: true })
             .eq("hospital_id", h.id).eq("status", "admitted"),
-          supabase.from("bills").select("net_amount")
-            .eq("hospital_id", h.id).gte("created_at", startOfToday).eq("status", "paid"),
+          supabase.from("bills").select("paid_amount")
+            .eq("hospital_id", h.id).gte("bill_date", today)
+            .in("payment_status", ["paid", "partial"]),
           supabase.from("insurance_claims").select("id", { count: "exact", head: true })
             .eq("hospital_id", h.id).in("status", ["submitted", "under_review"]),
           supabase.from("lab_orders").select("id", { count: "exact", head: true })
@@ -85,7 +86,7 @@ const CEOBoardPage: React.FC = () => {
             .maybeSingle(),
         ]);
 
-        const revenueToday = (billsToday.data || []).reduce((s: number, b: any) => s + Number(b.net_amount || 0), 0);
+        const revenueToday = (billsToday.data || []).reduce((s: number, b: any) => s + Number(b.paid_amount || 0), 0);
         const admittedCount = admitted.count || 0;
 
         return {

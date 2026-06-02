@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useHospitalContext } from "@/contexts/HospitalContext";
+import { hasTabAccess } from "@/lib/tabPermissions";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,13 +12,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Play, Camera, FileText, Check, Save, Printer, Send, Mic, MicOff,
-  Sparkles, ExternalLink, X, AlertTriangle, ClipboardList,
+  Sparkles, X, AlertTriangle, ClipboardList,
 } from "lucide-react";
 import type { RadiologyOrder } from "@/pages/radiology/RadiologyPage";
 import { useAIAudit } from "@/hooks/useAIAudit";
 import { useAIFeatureFlag } from "@/hooks/useAIFeatureFlag";
 import AIAttestationModal from "@/components/ai/AIAttestationModal";
 import PCPNDTFormModal from "./PCPNDTFormModal";
+import DicomViewerPanel from "./DicomViewerPanel";
 
 interface Report {
   id: string;
@@ -96,6 +99,7 @@ function getAge(dob: string | null): string {
 const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onStatusChange }) => {
   const { toast } = useToast();
   const { logAudit } = useAIAudit();
+  const { permissions, role } = useHospitalContext();
   const [report, setReport] = useState<Report | null>(null);
   const [pcpndt, setPcpndt] = useState<PcpndtForm | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -111,11 +115,8 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
   const [criticalFinding, setCriticalFinding] = useState("");
   const [doseMgy, setDoseMgy] = useState<string>("");
   const [pregnancyStatus, setPregnancyStatus] = useState<string>("not_applicable");
-  const [showPacsViewer, setShowPacsViewer] = useState(false);
 
-  // DICOM state
-  const [dicomUid, setDicomUid] = useState("");
-  const [pacsUrl, setPacsUrl] = useState("");
+  // DICOM state is now managed inside DicomViewerPanel
 
   // PCPNDT state
   const [pcpndtRecordExists, setPcpndtRecordExists] = useState(false);
@@ -179,8 +180,6 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
 
     setClinicalHistory(order.clinical_history || "");
     setIndication(order.indication || "");
-    setDicomUid(order.dicom_pacs_url ? "" : "");
-    setPacsUrl(order.dicom_pacs_url || "");
     setDoseMgy((order as any).dose_mgy ? String((order as any).dose_mgy) : "");
     setPregnancyStatus((order as any).pregnancy_status || "not_applicable");
 
@@ -453,14 +452,6 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
     }
   };
 
-  const saveDicomRef = async () => {
-    await supabase.from("radiology_orders").update({
-      dicom_pacs_url: pacsUrl || null,
-    }).eq("id", order.id);
-    toast({ title: "DICOM reference saved" });
-    onStatusChange();
-  };
-
   const savePcpndt = async () => {
     if (!pcpndtSexDecl) {
       toast({ title: "You must confirm sex determination declaration", variant: "destructive" });
@@ -590,9 +581,15 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
       {/* Tabs */}
       <Tabs defaultValue="report" className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="shrink-0 w-full justify-start rounded-none border-b border-border bg-card h-11 px-5">
-          <TabsTrigger value="report" className="text-xs">Report</TabsTrigger>
-          <TabsTrigger value="images" className="text-xs">Images</TabsTrigger>
-          {order.is_pcpndt && <TabsTrigger value="pcpndt" className="text-xs">PCPNDT</TabsTrigger>}
+          {[
+            { v: "report", l: "Report" },
+            { v: "images", l: "Images" },
+            ...(order.is_pcpndt ? [{ v: "pcpndt", l: "PCPNDT" }] : []),
+          ]
+            .filter((t) => hasTabAccess("radiology", t.v, permissions, role))
+            .map((t) => (
+              <TabsTrigger key={t.v} value={t.v} className="text-xs">{t.l}</TabsTrigger>
+            ))}
         </TabsList>
 
         {/* TAB 1: Report */}
@@ -844,65 +841,19 @@ const RadiologyReportingWorkspace: React.FC<Props> = ({ order, hospitalId, onSta
           </div>
         </TabsContent>
 
-        {/* TAB 2: Images */}
-        <TabsContent value="images" className="flex-1 overflow-y-auto mt-0 bg-slate-900 p-5">
-          <h3 className="text-base font-bold text-white mb-1">Image Viewer</h3>
-          {order.dicom_pacs_url ? (
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <Button className="flex-1 bg-blue-600 hover:bg-blue-700 h-10"
-                  onClick={() => window.open(order.dicom_pacs_url!, "_blank", "noopener,noreferrer")}>
-                  <ExternalLink size={14} className="mr-1" /> Open in New Tab
-                </Button>
-                <Button variant="outline" className="flex-1 h-10 text-slate-300 border-slate-600"
-                  onClick={() => setShowPacsViewer(v => !v)}>
-                  {showPacsViewer ? "Hide Viewer" : "View Inline"}
-                </Button>
-              </div>
-              {showPacsViewer && (
-                <iframe
-                  src={order.dicom_pacs_url}
-                  className="w-full rounded-lg border border-slate-600"
-                  style={{ height: "500px" }}
-                  sandbox="allow-scripts allow-same-origin allow-forms"
-                  title="PACS Viewer"
-                />
-              )}
-            </div>
-          ) : (
-            <div className="bg-slate-800 rounded-xl p-5 mt-4 space-y-4">
-              <p className="text-[13px] text-slate-300">
-                To link DICOM images to this study, enter the PACS URL below.
-              </p>
-              <div>
-                <Label className="text-[11px] text-slate-400 uppercase">PACS Image URL</Label>
-                <Input
-                  value={pacsUrl}
-                  onChange={e => setPacsUrl(e.target.value)}
-                  className="mt-1 bg-slate-700 border-slate-600 text-white"
-                  placeholder="https://pacs.hospital.com/viewer?studyUID=..."
-                />
-              </div>
-              <Button className="w-full bg-blue-600 hover:bg-blue-700" onClick={saveDicomRef}>
-                Save DICOM Reference
-              </Button>
-            </div>
-          )}
-
-          {/* Accession number prominent */}
-          <div className="text-center mt-8">
-            <p className="text-[12px] text-slate-500 uppercase tracking-wider">Accession Number</p>
-            <p className="text-[28px] font-bold text-white font-mono mt-1">
-              {order.accession_number || `RAD-${order.id.slice(0, 8)}`}
-            </p>
-            <p className="text-[11px] text-slate-500 mt-1">Use this number to retrieve images from your PACS</p>
-          </div>
-
-          <div className="bg-slate-800 rounded-lg p-3 mt-6">
-            <p className="text-[13px] text-slate-400">
-              For OHIF Viewer integration, configure your PACS URL in Settings → Radiology → PACS Configuration. Images will then open directly in the HMS viewer.
-            </p>
-          </div>
+        {/* TAB 2: Images — powered by DicomViewerPanel */}
+        <TabsContent value="images" className="flex-1 flex flex-col overflow-hidden mt-0 p-0">
+          <DicomViewerPanel
+            orderId={order.id}
+            patientName={order.patients?.full_name}
+            accessionNumber={order.accession_number || undefined}
+            modalityType={order.modality_type}
+            studyName={order.study_name}
+            currentPacsUrl={order.dicom_pacs_url}
+            onPacsUrlSaved={(url) => {
+              onStatusChange();
+            }}
+          />
         </TabsContent>
 
         {/* TAB 3: PCPNDT */}

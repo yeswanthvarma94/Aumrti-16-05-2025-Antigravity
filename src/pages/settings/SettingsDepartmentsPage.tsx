@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useHospitalId } from "@/hooks/useHospitalId";
 import { ArrowLeft, Plus, X, Building2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { useConfigValues } from "@/hooks/useConfigValues";
 import { cn } from "@/lib/utils";
 
 const COMMON_DEPTS = [
@@ -15,10 +16,10 @@ const COMMON_DEPTS = [
   "Radiology", "Pathology / Laboratory", "Pharmacy", "Physiotherapy",
 ];
 
-const TYPE_OPTIONS = ["clinical", "administrative", "support"] as const;
 
 const SettingsDepartmentsPage: React.FC = () => {
   const navigate = useNavigate();
+  const deptTypeOptions = useConfigValues("department_types");
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -234,7 +235,7 @@ const SettingsDepartmentsPage: React.FC = () => {
                 <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Type *</label>
                 <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}
                   className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
-                  {TYPE_OPTIONS.map((t) => <option key={t} value={t} className="capitalize">{t}</option>)}
+                  {deptTypeOptions.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
               <div>
